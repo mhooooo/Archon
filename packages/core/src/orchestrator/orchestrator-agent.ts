@@ -307,6 +307,83 @@ async function dispatchOrchestratorWorkflow(
   }
 }
 
+// ─── Supervised-Autonomous Dispatch ─────────────────────────────────────────
+
+/**
+ * Directly dispatch a pre-approved workflow without going through the AI router.
+ * Called by the Slack "go" trigger handler after Moo approves a heartbeat proposal.
+ *
+ * Bypasses the orchestrator AI — resolves codebase + workflow by name and calls
+ * dispatchOrchestratorWorkflow() directly. This is intentional: the AI already
+ * classified the issue and recommended a workflow; "go" is pure execution approval.
+ *
+ * Trust model: caller MUST verify user authorization before invoking this.
+ * Never call from unsupervised contexts (cron, reflection, launchd).
+ */
+export async function dispatchApprovedWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  workflowName: string,
+  codebaseName: string,
+  userMessage: string,
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<void> {
+  const log = getLog();
+
+  // 1. Resolve codebase
+  const codebases = await codebaseDb.listCodebases();
+  const codebase = findCodebaseByName(codebases, codebaseName);
+  if (!codebase) {
+    await platform.sendMessage(
+      conversationId,
+      `Codebase \`${codebaseName}\` not found. Register it first with \`/project add\`.`
+    );
+    log.warn({ codebaseName, conversationId }, 'go_dispatch_codebase_not_found');
+    return;
+  }
+
+  // 2. Get or create conversation
+  const conversation = await db.getOrCreateConversation(platform.getPlatformType(), conversationId);
+
+  // 3. Discover workflows from the codebase path
+  const workflowCwd = conversation.cwd ?? codebase.default_cwd;
+  let workflow: WorkflowDefinition | undefined;
+  try {
+    await syncArchonToWorktree(workflowCwd);
+    const { workflows } = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, {
+      globalSearchPath: getArchonHome(),
+    });
+    workflow = workflows.find(w => w.workflow.name === workflowName)?.workflow;
+  } catch (err) {
+    log.warn({ err, workflowName, workflowCwd }, 'go_dispatch_workflow_discovery_failed');
+  }
+
+  if (!workflow) {
+    await platform.sendMessage(
+      conversationId,
+      `Workflow \`${workflowName}\` not found in \`${codebaseName}\`. Check \`.archon/workflows/\`.`
+    );
+    log.warn({ workflowName, codebaseName, conversationId }, 'go_dispatch_workflow_not_found');
+    return;
+  }
+
+  log.info(
+    { workflowName, codebaseName, conversationId },
+    'go_dispatch_approved_workflow_starting'
+  );
+
+  // 4. Dispatch
+  await dispatchOrchestratorWorkflow(
+    platform,
+    conversationId,
+    conversation,
+    codebase,
+    workflow,
+    userMessage,
+    isolationHints
+  );
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
 /** Returns true if the error indicates the Claude SDK session ID is no longer valid. */

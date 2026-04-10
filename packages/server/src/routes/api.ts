@@ -2621,4 +2621,48 @@ export function registerApiRoutes(
     const result = await checkForUpdate(appVersion);
     return c.json(result ?? noUpdate);
   });
+
+  // POST /api/proposals - Enqueue a supervised-autonomous workflow proposal
+  // Called by heartbeat.py after sending the Slack triage DM.
+  // The "go" Slack handler reads from this queue when Moo approves.
+  app.post('/api/proposals', async c => {
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json();
+    } catch {
+      return apiError(c, 400, 'Invalid JSON body');
+    }
+
+    const { channelId, workflowName, codebaseName, userMessage, issueNumber, branchName } = body;
+
+    if (typeof channelId !== 'string' || !channelId) {
+      return apiError(c, 400, 'channelId is required');
+    }
+    if (typeof workflowName !== 'string' || !workflowName) {
+      return apiError(c, 400, 'workflowName is required');
+    }
+    if (typeof codebaseName !== 'string' || !codebaseName) {
+      return apiError(c, 400, 'codebaseName is required');
+    }
+    if (typeof userMessage !== 'string' || !userMessage) {
+      return apiError(c, 400, 'userMessage is required');
+    }
+
+    const { proposalQueue } = await import('../proposals');
+    const proposal = proposalQueue.enqueue({
+      channelId,
+      workflowName,
+      codebaseName,
+      userMessage,
+      issueNumber: typeof issueNumber === 'number' ? issueNumber : undefined,
+      branchName: typeof branchName === 'string' ? branchName : undefined,
+    });
+
+    getLog().info(
+      { proposalId: proposal.id, channelId, workflowName, codebaseName },
+      'proposal_enqueued'
+    );
+
+    return c.json({ id: proposal.id, expiresAt: proposal.expiresAt.toISOString() }, 201);
+  });
 }

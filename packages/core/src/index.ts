@@ -78,7 +78,7 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage } from './orchestrator/orchestrator-agent';
+export { handleMessage, dispatchApprovedWorkflow } from './orchestrator/orchestrator-agent';
 export { buildOrchestratorPrompt, buildProjectScopedPrompt } from './orchestrator/prompt-builder';
 
 // =============================================================================
