@@ -807,68 +807,10 @@ describe('orchestrator-agent handleMessage', () => {
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Done');
     });
 
-    test('silences further output after /invoke-workflow detected but captures sessionId', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: '/invoke-workflow fix-bug --project test-project',
-        };
-        // These are silenced (not sent to platform) but loop continues to capture result
-        yield { type: 'assistant', content: 'This should not appear' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug');
-
-      // Should dispatch the workflow
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-      // The /invoke-workflow chunk itself should NOT be streamed to the frontend
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        '/invoke-workflow fix-bug --project test-project'
-      );
-      // Subsequent chunks should also NOT be sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', 'This should not appear');
-    });
-
-    test('streams prefix text but not the /invoke-workflow chunk', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        // First chunk: user-visible explanation text - should be streamed
-        yield { type: 'assistant', content: "I'll help with that." };
-        // Second chunk: the command - should NOT be streamed
-        yield {
-          type: 'assistant',
-          content: '\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug');
-
-      // Prefix text streamed to platform
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', "I'll help with that.");
-      // Command chunk NOT sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        '\n/invoke-workflow fix-bug --project test-project'
-      );
-      // Workflow should be dispatched
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
+    // NOTE: /invoke-workflow text-sentinel tests removed — commit 2 replaced
+    // the sentinel with the invoke_workflow MCP tool. MCP tool dispatch is
+    // covered by workflow-tool.test.ts. The /register-project sentinel is
+    // still in use and retains its test below.
 
     test('suppresses /register-project chunk in stream mode', async () => {
       mockExistsSync.mockReturnValue(true);
@@ -897,35 +839,6 @@ describe('orchestrator-agent handleMessage', () => {
       );
       // Subsequent chunks should also NOT be sent
       expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', 'This should not appear');
-    });
-
-    test('sends partial command text when command is split across chunks', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        // Chunk 1: partial command — does not match regex yet, so it IS sent
-        yield { type: 'assistant', content: '/invoke-work' };
-        // Chunk 2: completes the command — accumulated string matches, NOT sent
-        yield { type: 'assistant', content: 'flow fix-bug --project test-project' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug');
-
-      // Partial chunk is sent (pre-existing behavior: detection fires on accumulated text)
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '/invoke-work');
-      // Completing chunk is NOT sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        'flow fix-bug --project test-project'
-      );
-      // Workflow is still dispatched
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     });
   });
 
@@ -988,35 +901,9 @@ describe('orchestrator-agent handleMessage', () => {
       );
     });
 
-    test('dispatches workflow when AI responds with /invoke-workflow', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
-
-      // Should dispatch to workflow after validation
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('sends remaining message before dispatching workflow', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix it');
-
-      // First sendMessage should be the explanation text
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me investigate this.');
-    });
+    // NOTE: /invoke-workflow text-sentinel dispatch tests removed — commit 2
+    // replaced the sentinel with the invoke_workflow MCP tool. MCP tool
+    // dispatch is covered by workflow-tool.test.ts.
 
     test('sends error for unknown project in workflow invocation', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1045,72 +932,6 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me help you with that!');
-    });
-
-    test('batch mode dispatches workflow correctly', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug');
-
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('passes synthesizedPrompt to workflow dispatch instead of original message', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-      const synthesized = 'Analyze the orchestrator module architecture in detail';
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: `Running analysis.\n/invoke-workflow archon-assist --project test-project --prompt "${synthesized}"`,
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'do that analysis thing');
-
-      expect(mockExecuteWorkflow).toHaveBeenCalledWith(
-        expect.anything(), // deps
-        expect.anything(), // platform
-        expect.anything(), // conversationId
-        expect.anything(), // cwd
-        expect.anything(), // workflow
-        synthesized, // synthesizedPrompt, not original message
-        expect.anything(), // conversation.id
-        expect.anything() // codebase.id
-      );
-    });
-
-    test('falls back to original message when --prompt not provided', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'assistant',
-          content: 'On it.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
-
-      expect(mockExecuteWorkflow).toHaveBeenCalledWith(
-        expect.anything(), // deps
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        'fix the login bug', // original message used as fallback
-        expect.anything(),
-        expect.anything()
-      );
     });
 
     test('sends error when workflow found in parsing but not in dispatch', async () => {
@@ -1531,9 +1352,9 @@ describe('orchestrator-agent handleMessage', () => {
         await handleMessage(platform, 'chat-456', 'hello');
 
         expect(mockClient.sendQuery).toHaveBeenCalledTimes(2);
-        // conversationId is the platform conversation ID ('chat-456'), not the DB conversation ID
+        // transitionSession takes the DB conversation ID, matching the 'first-message' convention
         expect(mockTransitionSession).toHaveBeenCalledWith(
-          'chat-456',
+          mockConversation.id,
           'stale-session-cleared',
           expect.any(Object)
         );
@@ -1593,6 +1414,11 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Bare Command Normalization ────────────────────────────────────────
 
   describe('bare command normalization', () => {
+    beforeEach(() => {
+      // Bare command normalization is scoped to Slack platform only
+      platform.getPlatformType.mockReturnValue('slack');
+    });
+
     test('treats bare "reset" as "/reset" command', async () => {
       mockHandleCommand.mockResolvedValue({
         message: 'Session cleared',
