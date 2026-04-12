@@ -64,6 +64,7 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes } from './routes/api';
 import {
   handleMessage,
+  dispatchApprovedWorkflow,
   pool,
   ConversationLockManager,
   classifyAndFormatError,
@@ -445,6 +446,94 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Strip the bot mention from the message
         const content = slackAdapter.stripBotMention(event.text);
         if (!content) return; // Message was only a mention with no content
+
+        // ── Supervised-autonomous "go" trigger ──────────────────────────────
+        // Pre-check before normal message processing.
+        // Matches: "go", "go #42", "go 42" (case-insensitive).
+        // Trust model: the approval gate is here — only Slack-authorized users
+        // reach this point (whitelist enforced in adapter). One "go" = one
+        // dispatch. Re-sending "go" returns a status confirmation.
+        const goMatch = /^go(\s+#?(\d+))?$/i.exec(content.trim());
+        if (goMatch) {
+          // Channel ID is the first segment of conversationId ("channel:ts")
+          const channelId = conversationId.split(':')[0];
+          const issueNumber = goMatch[2] ? parseInt(goMatch[2], 10) : undefined;
+
+          const { proposalQueue } = await import('./proposals');
+          const pending = proposalQueue.getPending(channelId);
+
+          if (pending.length === 0) {
+            // Idempotency: check if we already dispatched this cycle
+            const all = proposalQueue.getAll(channelId);
+            const alreadyDispatched = all.filter(p => p.dispatched);
+            if (alreadyDispatched.length > 0) {
+              await slackAdapter.sendMessage(
+                conversationId,
+                `Already dispatched ${alreadyDispatched.length} workflow(s) this cycle. Check status with \`/workflow status\`.`
+              );
+            } else {
+              await slackAdapter.sendMessage(
+                conversationId,
+                'No pending workflow proposals. Heartbeat will surface new GitHub issues.'
+              );
+            }
+            return;
+          }
+
+          // Determine which proposals to approve
+          let toDispatch: typeof pending;
+          if (issueNumber !== undefined) {
+            const match = pending.find(p => p.issueNumber === issueNumber);
+            if (!match) {
+              const available = pending
+                .filter(p => p.issueNumber !== undefined)
+                .map(p => `#${p.issueNumber}`)
+                .join(', ');
+              await slackAdapter.sendMessage(
+                conversationId,
+                `No pending proposal for issue #${issueNumber}.${available ? ` Available: ${available}` : ''}`
+              );
+              return;
+            }
+            toDispatch = [match];
+          } else {
+            // "go" with no number = approve all pending
+            toDispatch = pending;
+          }
+
+          // Mark dispatched BEFORE starting (idempotency guard — prevents
+          // double-dispatch if the handler is re-entered before execution completes)
+          proposalQueue.markDispatched(toDispatch.map(p => p.id));
+
+          getLog().info(
+            { count: toDispatch.length, channelId, issueNumber },
+            'slack_go_trigger_approved'
+          );
+
+          const isolationHints = { workflowType: 'thread', workflowId: conversationId } as const;
+
+          // Fire-and-forget dispatch for each approved proposal
+          for (const proposal of toDispatch) {
+            await slackAdapter.sendMessage(
+              conversationId,
+              `Dispatching \`${proposal.workflowName}\` on \`${proposal.codebaseName}\`${proposal.issueNumber ? ` (issue #${proposal.issueNumber})` : ''}…`
+            );
+            lockManager
+              .acquireLock(conversationId, async () => {
+                await dispatchApprovedWorkflow(
+                  slackAdapter,
+                  conversationId,
+                  proposal.workflowName,
+                  proposal.codebaseName,
+                  proposal.userMessage,
+                  isolationHints
+                );
+              })
+              .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
+          }
+          return;
+        }
+        // ── End "go" trigger ────────────────────────────────────────────────
 
         // Check for thread context
         let threadContext: string | undefined;

@@ -182,6 +182,21 @@ export interface RepoConfig {
   allow_target_repo_keys?: boolean;
 
   /**
+   * Files whose content is prepended to the conversation prompt when this
+   * project is the active scope. Paths are relative to the project root.
+   * Used for injecting project-specific identity (agent personality, user
+   * profile, working memory).
+   *
+   * Security: Paths must be relative (no leading `/`) and must not contain
+   * `..` segments. Violations are logged and skipped. Content is capped at
+   * 20,000 characters total. Missing files emit a warn-level log and are
+   * skipped.
+   *
+   * @example ['docs/AGENT.md', 'docs/USER.md']
+   */
+  contextFiles?: string[];
+
+  /**
    * Default commands/workflows configuration
    */
   defaults?: {
@@ -271,6 +286,12 @@ export interface MergedConfig {
    * @default false
    */
   allowTargetRepoKeys: boolean;
+
+  /**
+   * Context files from repo config, propagated for prompt injection.
+   * Undefined when no context files are configured.
+   */
+  contextFiles?: string[];
 }
 
 /**

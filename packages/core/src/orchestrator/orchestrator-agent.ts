@@ -7,6 +7,8 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { resolve, normalize } from 'path';
 import { createLogger } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -25,6 +27,7 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAssistantClient } from '../clients/factory';
+import { STALE_SESSION_PATTERNS } from '../clients/claude';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -47,6 +50,8 @@ import { buildOrchestratorPrompt, buildProjectScopedPrompt } from './prompt-buil
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { buildWorkflowMcpServer } from './workflow-tool';
+import { findCodebaseByName } from './codebase-utils';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -61,6 +66,8 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
+/** Bare commands that Slack users commonly send without a leading slash */
+const SLACK_BARE_COMMANDS = new Set(['reset']);
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -82,21 +89,6 @@ export interface OrchestratorCommands {
 }
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
-
-/**
- * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
- * Case-insensitive. Used in both the parse phase and the dispatch phase.
- */
-function findCodebaseByName(
-  codebases: readonly Codebase[],
-  projectName: string
-): Codebase | undefined {
-  const projectLower = projectName.toLowerCase();
-  return codebases.find(c => {
-    const nameLower = c.name.toLowerCase();
-    return nameLower === projectLower || nameLower.endsWith(`/${projectLower}`);
-  });
-}
 
 /**
  * Parse orchestrator commands from AI response text.
@@ -317,7 +309,93 @@ async function dispatchOrchestratorWorkflow(
   }
 }
 
+// ─── Supervised-Autonomous Dispatch ─────────────────────────────────────────
+
+/**
+ * Directly dispatch a pre-approved workflow without going through the AI router.
+ * Called by the Slack "go" trigger handler after Moo approves a heartbeat proposal.
+ *
+ * Bypasses the orchestrator AI — resolves codebase + workflow by name and calls
+ * dispatchOrchestratorWorkflow() directly. This is intentional: the AI already
+ * classified the issue and recommended a workflow; "go" is pure execution approval.
+ *
+ * Trust model: caller MUST verify user authorization before invoking this.
+ * Never call from unsupervised contexts (cron, reflection, launchd).
+ */
+export async function dispatchApprovedWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  workflowName: string,
+  codebaseName: string,
+  userMessage: string,
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<void> {
+  const log = getLog();
+
+  // 1. Resolve codebase
+  const codebases = await codebaseDb.listCodebases();
+  const codebase = findCodebaseByName(codebases, codebaseName);
+  if (!codebase) {
+    await platform.sendMessage(
+      conversationId,
+      `Codebase \`${codebaseName}\` not found. Register it first with \`/project add\`.`
+    );
+    log.warn({ codebaseName, conversationId }, 'go_dispatch_codebase_not_found');
+    return;
+  }
+
+  // 2. Get or create conversation
+  const conversation = await db.getOrCreateConversation(platform.getPlatformType(), conversationId);
+
+  // 3. Discover workflows from the codebase path
+  const workflowCwd = conversation.cwd ?? codebase.default_cwd;
+  let workflow: WorkflowDefinition | undefined;
+  try {
+    await syncArchonToWorktree(workflowCwd);
+    const { workflows } = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, {
+      globalSearchPath: getArchonHome(),
+    });
+    workflow = workflows.find(w => w.workflow.name === workflowName)?.workflow;
+  } catch (err) {
+    log.warn({ err, workflowName, workflowCwd }, 'go_dispatch_workflow_discovery_failed');
+  }
+
+  if (!workflow) {
+    await platform.sendMessage(
+      conversationId,
+      `Workflow \`${workflowName}\` not found in \`${codebaseName}\`. Check \`.archon/workflows/\`.`
+    );
+    log.warn({ workflowName, codebaseName, conversationId }, 'go_dispatch_workflow_not_found');
+    return;
+  }
+
+  log.info(
+    { workflowName, codebaseName, conversationId },
+    'go_dispatch_approved_workflow_starting'
+  );
+
+  // 4. Dispatch
+  await dispatchOrchestratorWorkflow(
+    platform,
+    conversationId,
+    conversation,
+    codebase,
+    workflow,
+    userMessage,
+    isolationHints
+  );
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
+
+/** Returns true if the error indicates the Claude SDK session ID is no longer valid. */
+function isStaleSessionError(error: Error): boolean {
+  const msg = error.message.toLowerCase();
+  // Two detection sources — either suffices:
+  // 1. Enriched prefix added by claude.ts ("Claude Code stale session: …")
+  // 2. Raw SDK message matched via STALE_SESSION_PATTERNS (single source of truth)
+  return msg.includes('stale session') || STALE_SESSION_PATTERNS.some(p => msg.includes(p));
+}
 
 async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {
   try {
@@ -451,14 +529,15 @@ function buildFullPrompt(
   message: string,
   issueContext: string | undefined,
   threadContext: string | undefined,
-  attachedFiles?: AttachedFile[]
+  attachedFiles?: AttachedFile[],
+  projectContextContent?: string
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
   const systemPrompt = scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, projectContextContent)
     : buildOrchestratorPrompt(codebases, workflows);
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
@@ -519,11 +598,18 @@ export async function handleMessage(
       conversationId
     );
 
+    // 1b. Normalize bare commands (Slack users often omit the leading slash)
+    const effectiveMessage =
+      platform.getPlatformType() === 'slack' &&
+      SLACK_BARE_COMMANDS.has(message.trim().toLowerCase())
+        ? `/${message.trim().toLowerCase()}`
+        : message;
+
     // 1c. Auto-generate title for untitled conversations (fire-and-forget)
-    if (!conversation.title && !message.startsWith('/')) {
+    if (!conversation.title && !effectiveMessage.startsWith('/')) {
       void generateAndSetTitle(
         conversation.id,
-        message,
+        effectiveMessage,
         conversation.ai_assistant_type,
         getArchonWorkspacesPath()
       );
@@ -645,8 +731,8 @@ export async function handleMessage(
     }
 
     // 2. Check for deterministic commands
-    if (message.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+    if (effectiveMessage.startsWith('/')) {
+      const { command } = commandHandler.parseCommand(effectiveMessage);
       const deterministicCommands = [
         'help',
         'status',
@@ -663,7 +749,7 @@ export async function handleMessage(
       if (deterministicCommands.includes(command)) {
         if (command === 'register-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleRegisterProject(message, platform, conversationId);
+          const result = await handleRegisterProject(effectiveMessage, platform, conversationId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -683,7 +769,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message);
+        const result = await commandHandler.handleCommand(conversation, effectiveMessage);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -731,6 +817,51 @@ export async function handleMessage(
       });
     }
 
+    // Read per-project context files for prompt injection
+    let projectContextContent: string | undefined;
+    if (discoveredConfig?.contextFiles?.length && conversation.codebase_id) {
+      const codebase = codebases.find(c => c.id === conversation.codebase_id);
+      if (codebase) {
+        const MAX_CONTEXT_CHARS = 20_000;
+        const parts: string[] = [];
+        let totalLen = 0;
+        for (const relPath of discoveredConfig.contextFiles) {
+          if (totalLen >= MAX_CONTEXT_CHARS) break;
+          const absPath = resolve(codebase.default_cwd, relPath);
+          // Defense-in-depth: verify resolved path is under repo root
+          const repoRoot = normalize(codebase.default_cwd);
+          if (!normalize(absPath).startsWith(repoRoot)) {
+            getLog().warn({ relPath, absPath, repoRoot }, 'context_file_escaped_repo_root');
+            continue;
+          }
+          try {
+            let content = await readFile(absPath, 'utf-8');
+            const remaining = MAX_CONTEXT_CHARS - totalLen;
+            if (content.length > remaining) {
+              content = content.slice(0, remaining);
+              const lastNl = content.lastIndexOf('\n');
+              if (lastNl > 0) content = content.slice(0, lastNl);
+            }
+            parts.push(`### ${relPath}\n\n${content.trim()}`);
+            totalLen += content.length;
+          } catch (err) {
+            const e = err as NodeJS.ErrnoException;
+            if (e.code === 'ENOENT') {
+              getLog().warn({ relPath, codebase: codebase.name }, 'context_file_not_found');
+            } else {
+              getLog().warn(
+                { relPath, err: e, codebase: codebase.name },
+                'context_file_read_error'
+              );
+            }
+          }
+        }
+        if (parts.length > 0) {
+          projectContextContent = parts.join('\n\n---\n\n');
+        }
+      }
+    }
+
     const fullPrompt = buildFullPrompt(
       conversation,
       codebases,
@@ -738,7 +869,8 @@ export async function handleMessage(
       message,
       issueContext,
       threadContext,
-      attachedFiles
+      attachedFiles,
+      projectContextContent
     );
     const cwd = getArchonWorkspacesPath();
 
@@ -821,7 +953,7 @@ export async function handleMessage(
 async function handleStreamMode(
   platform: IPlatformAdapter,
   conversationId: string,
-  originalMessage: string,
+  _originalMessage: string, // unused — invoke_workflow MCP tool dispatches workflows inline via task_description
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
   aiClient: ReturnType<typeof getAssistantClient>,
@@ -830,59 +962,118 @@ async function handleStreamMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
-  issueContext?: string,
+  _issueContext?: string, // unused — issue context is passed via task_description in the tool call
   requestOptions?: AssistantRequestOptions
 ): Promise<void> {
+  const workflowMcpServer = buildWorkflowMcpServer({
+    platform,
+    conversationId,
+    conversation,
+    codebases,
+    workflows,
+    isolationHints,
+    dispatch: (codebase, workflow, taskDescription) =>
+      dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        workflow,
+        taskDescription,
+        isolationHints
+      ),
+  });
+
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let sessionForQuery = session;
+  let retried = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
-    if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
-        allMessages.push(msg.content);
-        const accumulated = allMessages.join('');
-        // Check for orchestrator commands BEFORE streaming to frontend.
-        // If detected, suppress this chunk and all future chunks — the full
-        // response will be parsed post-loop and the command dispatched there.
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
-          commandDetected = true;
-        } else {
-          await platform.sendMessage(conversationId, msg.content);
-        }
+  async function runStreamQuery(): Promise<void> {
+    for await (const msg of aiClient.sendQuery(
+      fullPrompt,
+      cwd,
+      sessionForQuery.assistant_session_id ?? undefined,
+      {
+        ...requestOptions,
+        mcpServers: {
+          ...(requestOptions?.mcpServers ?? {}),
+          'archon-tools': workflowMcpServer,
+        },
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
-      if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        await platform.sendMessage(conversationId, toolMessage, {
-          category: 'tool_call_formatted',
-        });
-        if (platform.sendStructuredEvent) {
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        if (!commandDetected) {
+          allMessages.push(msg.content);
+          const accumulated = allMessages.join('');
+          // Check for orchestrator commands BEFORE streaming to frontend.
+          // If detected, suppress this chunk and all future chunks — the full
+          // response will be parsed post-loop and the command dispatched there.
+          if (/^\/register-project\s/m.test(accumulated)) {
+            commandDetected = true;
+          } else {
+            await platform.sendMessage(conversationId, msg.content);
+          }
+        }
+      } else if (msg.type === 'tool' && msg.toolName) {
+        if (!commandDetected) {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          await platform.sendMessage(conversationId, toolMessage, {
+            category: 'tool_call_formatted',
+          });
+          if (platform.sendStructuredEvent) {
+            await platform.sendStructuredEvent(conversationId, msg);
+          }
+        }
+      } else if (msg.type === 'tool_result' && msg.toolName) {
+        if (!commandDetected && platform.sendStructuredEvent) {
           await platform.sendStructuredEvent(conversationId, msg);
         }
-      }
-    } else if (msg.type === 'tool_result' && msg.toolName) {
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
-      }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      } else if (msg.type === 'result' && msg.sessionId) {
+        newSessionId = msg.sessionId;
+        if (!commandDetected && platform.sendStructuredEvent) {
+          await platform.sendStructuredEvent(conversationId, msg);
+        }
       }
     }
   }
 
+  try {
+    await runStreamQuery();
+  } catch (error) {
+    const err = toError(error);
+    if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
+      retried = true;
+      getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
+      sessionForQuery = await sessionDb.transitionSession(
+        conversation.id,
+        'stale-session-cleared',
+        {
+          ai_assistant_type: conversation.ai_assistant_type,
+        }
+      );
+      newSessionId = undefined; // Clear any partial state from failed attempt before retry
+      allMessages.length = 0;
+      commandDetected = false;
+      try {
+        await runStreamQuery(); // retry in fresh session
+        await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      } catch (retryError) {
+        const retryErr = toError(retryError);
+        getLog().error({ conversationId, err: retryErr }, 'stale_session_retry_failed');
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ Previous session expired and retry also failed. Use /reset to start a fresh session.'
+        );
+      }
+    } else {
+      throw err;
+    }
+  }
+
   if (newSessionId) {
-    await tryPersistSessionId(session.id, newSessionId);
+    await tryPersistSessionId(sessionForQuery.id, newSessionId);
   }
 
   if (allMessages.length === 0) {
@@ -892,25 +1083,6 @@ async function handleStreamMode(
 
   const fullResponse = allMessages.join('');
   const commands = parseOrchestratorCommands(fullResponse, codebases, workflows);
-
-  if (commands.workflowInvocation) {
-    // Retract streamed text — workflow dispatch replaces it
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleWorkflowInvocationResult(
-      platform,
-      conversationId,
-      conversation,
-      codebases,
-      workflows,
-      commands.workflowInvocation,
-      originalMessage,
-      isolationHints,
-      issueContext
-    );
-    return;
-  }
 
   if (commands.projectRegistration) {
     if (platform.emitRetract) {
@@ -937,7 +1109,7 @@ async function handleStreamMode(
 async function handleBatchMode(
   platform: IPlatformAdapter,
   conversationId: string,
-  originalMessage: string,
+  _originalMessage: string, // unused — invoke_workflow MCP tool dispatches workflows inline via task_description
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
   aiClient: ReturnType<typeof getAssistantClient>,
@@ -946,57 +1118,119 @@ async function handleBatchMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
-  issueContext?: string,
+  _issueContext?: string, // unused — issue context is passed via task_description in the tool call
   requestOptions?: AssistantRequestOptions
 ): Promise<void> {
+  const workflowMcpServer = buildWorkflowMcpServer({
+    platform,
+    conversationId,
+    conversation,
+    codebases,
+    workflows,
+    isolationHints,
+    dispatch: (codebase, workflow, taskDescription) =>
+      dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        workflow,
+        taskDescription,
+        isolationHints
+      ),
+  });
+
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
   let assistantChunksTruncated = false;
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let sessionForQuery = session;
+  let retried = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
-    if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
-        assistantMessages.push(msg.content);
-        allChunks.push({ type: 'assistant', content: msg.content });
+  async function runBatchQuery(): Promise<void> {
+    for await (const msg of aiClient.sendQuery(
+      fullPrompt,
+      cwd,
+      sessionForQuery.assistant_session_id ?? undefined,
+      {
+        ...requestOptions,
+        mcpServers: {
+          ...(requestOptions?.mcpServers ?? {}),
+          'archon-tools': workflowMcpServer,
+        },
+      }
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        if (!commandDetected) {
+          assistantMessages.push(msg.content);
+          allChunks.push({ type: 'assistant', content: msg.content });
 
-        if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
-          assistantMessages.shift();
-          assistantChunksTruncated = true;
+          if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
+            assistantMessages.shift();
+            assistantChunksTruncated = true;
+          }
+          const accumulated = assistantMessages.join('');
+          if (/^\/register-project\s/m.test(accumulated)) {
+            commandDetected = true;
+          }
         }
-        const accumulated = assistantMessages.join('');
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
-          commandDetected = true;
+      } else if (msg.type === 'tool' && msg.toolName) {
+        if (!commandDetected) {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          allChunks.push({ type: 'tool', content: toolMessage });
+          getLog().debug({ toolName: msg.toolName }, 'tool_call');
         }
+      } else if (msg.type === 'result' && msg.sessionId) {
+        newSessionId = msg.sessionId;
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
-      if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        allChunks.push({ type: 'tool', content: toolMessage });
-        getLog().debug({ toolName: msg.toolName }, 'tool_call');
+
+      if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
+        allChunks.shift();
+        totalChunksTruncated = true;
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
     }
+  }
 
-    if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
-      allChunks.shift();
-      totalChunksTruncated = true;
+  try {
+    await runBatchQuery();
+  } catch (error) {
+    const err = toError(error);
+    if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
+      retried = true;
+      getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
+      sessionForQuery = await sessionDb.transitionSession(
+        conversation.id,
+        'stale-session-cleared',
+        {
+          ai_assistant_type: conversation.ai_assistant_type,
+        }
+      );
+      newSessionId = undefined; // Clear any partial state from failed attempt before retry
+      allChunks.length = 0;
+      assistantMessages.length = 0;
+      assistantChunksTruncated = false;
+      totalChunksTruncated = false;
+      commandDetected = false;
+      try {
+        await runBatchQuery(); // retry in fresh session
+        await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      } catch (retryError) {
+        const retryErr = toError(retryError);
+        getLog().error({ conversationId, err: retryErr }, 'stale_session_retry_failed');
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ Previous session expired and retry also failed. Use /reset to start a fresh session.'
+        );
+      }
+    } else {
+      throw err;
     }
   }
 
   if (newSessionId) {
-    await tryPersistSessionId(session.id, newSessionId);
+    await tryPersistSessionId(sessionForQuery.id, newSessionId);
   }
 
   if (assistantChunksTruncated || totalChunksTruncated) {
@@ -1027,24 +1261,6 @@ async function handleBatchMode(
   // Parse orchestrator commands from filtered response
   const commands = parseOrchestratorCommands(finalMessage, codebases, workflows);
 
-  if (commands.workflowInvocation) {
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleWorkflowInvocationResult(
-      platform,
-      conversationId,
-      conversation,
-      codebases,
-      workflows,
-      commands.workflowInvocation,
-      originalMessage,
-      isolationHints,
-      issueContext
-    );
-    return;
-  }
-
   if (commands.projectRegistration) {
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
@@ -1064,71 +1280,6 @@ async function handleBatchMode(
 }
 
 // ─── Orchestrator Command Handlers ──────────────────────────────────────────
-
-/**
- * Handle a parsed /invoke-workflow command from AI response.
- */
-async function handleWorkflowInvocationResult(
-  platform: IPlatformAdapter,
-  conversationId: string,
-  conversation: Conversation,
-  codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[],
-  invocation: WorkflowInvocation,
-  originalMessage: string,
-  isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string
-): Promise<void> {
-  const { workflowName, projectName, remainingMessage } = invocation;
-
-  // Send explanation text before dispatching
-  if (remainingMessage) {
-    await platform.sendMessage(conversationId, remainingMessage);
-  }
-
-  // Find the codebase and workflow (supports partial name matching)
-  const codebase = findCodebaseByName(codebases, projectName);
-  const workflow = findWorkflow(workflowName, [...workflows]);
-
-  if (codebase && workflow) {
-    const workflowPrompt = invocation.synthesizedPrompt ?? originalMessage;
-    getLog().debug(
-      {
-        source: invocation.synthesizedPrompt ? 'synthesized' : 'original',
-        promptLength: workflowPrompt.length,
-        workflowName,
-        hasIssueContext: !!issueContext,
-        issueContextLength: issueContext?.length ?? 0,
-      },
-      'workflow_prompt_resolved'
-    );
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      workflow,
-      workflowPrompt,
-      isolationHints
-    );
-    return;
-  }
-
-  // Fallback: send error about missing project or workflow
-  if (!codebase) {
-    const projectList = codebases.map(c => `- ${c.name}`).join('\n');
-    await platform.sendMessage(
-      conversationId,
-      `I couldn't find a project matching "${projectName}". Here are your registered projects:\n${projectList || '(none)'}\n\nPlease specify which project you'd like to use.`
-    );
-  } else if (!workflow) {
-    getLog().warn({ workflowName, projectName }, 'workflow_not_found_in_dispatch');
-    await platform.sendMessage(
-      conversationId,
-      `Workflow \`${workflowName}\` is not available. Use \`/workflow list\` to see available workflows.`
-    );
-  }
-}
 
 /**
  * Handle a parsed /register-project command from AI response.
