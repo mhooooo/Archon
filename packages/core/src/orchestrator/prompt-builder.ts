@@ -147,7 +147,8 @@ You can answer questions directly or invoke workflows for structured development
 export function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  contextContent?: string
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
@@ -176,6 +177,11 @@ ${formatProjectSection(scopedCodebase)}
   prompt += formatWorkflowSection(workflows);
 
   prompt += buildRoutingRulesWithProject(scopedCodebase.name);
+
+  // Inject per-project context files (identity, memory, etc.)
+  if (contextContent) {
+    prompt += '\n\n---\n\n## Project Context\n\n' + contextContent;
+  }
 
   return prompt;
 }

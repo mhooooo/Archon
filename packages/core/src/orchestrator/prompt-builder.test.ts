@@ -1,5 +1,46 @@
 import { describe, test, expect } from 'bun:test';
-import { buildRoutingRulesWithProject } from './prompt-builder';
+import { buildRoutingRulesWithProject, buildProjectScopedPrompt } from './prompt-builder';
+import type { Codebase } from '../types';
+
+function makeCodebase(overrides?: Partial<Codebase>): Codebase {
+  return {
+    id: '1',
+    name: 'test',
+    default_cwd: '/test',
+    ai_assistant_type: 'claude',
+    repository_url: '',
+    allow_env_keys: false,
+    commands: {},
+    created_at: new Date(),
+    updated_at: new Date(),
+    ...overrides,
+  };
+}
+
+describe('buildProjectScopedPrompt contextContent', () => {
+  test('includes context content when provided', () => {
+    const codebase = makeCodebase();
+    const prompt = buildProjectScopedPrompt(codebase, [codebase], [], 'I am JARVIS');
+    expect(prompt).toContain('## Project Context');
+    expect(prompt).toContain('I am JARVIS');
+  });
+
+  test('omits context section when no content', () => {
+    const codebase = makeCodebase();
+    const prompt = buildProjectScopedPrompt(codebase, [codebase], []);
+    expect(prompt).not.toContain('## Project Context');
+  });
+
+  test('context appears after routing rules', () => {
+    const codebase = makeCodebase();
+    const prompt = buildProjectScopedPrompt(codebase, [codebase], [], 'identity context here');
+    const routingIdx = prompt.indexOf('## Routing Rules');
+    const contextIdx = prompt.indexOf('## Project Context');
+    expect(routingIdx).toBeGreaterThan(-1);
+    expect(contextIdx).toBeGreaterThan(-1);
+    expect(routingIdx).toBeLessThan(contextIdx);
+  });
+});
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules instruct Claude to call invoke_workflow tool', () => {

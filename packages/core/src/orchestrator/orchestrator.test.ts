@@ -641,7 +641,8 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildProjectScopedPrompt).toHaveBeenCalledWith(
         mockCodebase,
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        undefined
       );
     });
 

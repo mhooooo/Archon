@@ -7,6 +7,8 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { resolve, normalize } from 'path';
 import { createLogger } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -527,14 +529,15 @@ function buildFullPrompt(
   message: string,
   issueContext: string | undefined,
   threadContext: string | undefined,
-  attachedFiles?: AttachedFile[]
+  attachedFiles?: AttachedFile[],
+  projectContextContent?: string
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
   const systemPrompt = scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, projectContextContent)
     : buildOrchestratorPrompt(codebases, workflows);
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
@@ -814,6 +817,51 @@ export async function handleMessage(
       });
     }
 
+    // Read per-project context files for prompt injection
+    let projectContextContent: string | undefined;
+    if (discoveredConfig?.contextFiles?.length && conversation.codebase_id) {
+      const codebase = codebases.find(c => c.id === conversation.codebase_id);
+      if (codebase) {
+        const MAX_CONTEXT_CHARS = 20_000;
+        const parts: string[] = [];
+        let totalLen = 0;
+        for (const relPath of discoveredConfig.contextFiles) {
+          if (totalLen >= MAX_CONTEXT_CHARS) break;
+          const absPath = resolve(codebase.default_cwd, relPath);
+          // Defense-in-depth: verify resolved path is under repo root
+          const repoRoot = normalize(codebase.default_cwd);
+          if (!normalize(absPath).startsWith(repoRoot)) {
+            getLog().warn({ relPath, absPath, repoRoot }, 'context_file_escaped_repo_root');
+            continue;
+          }
+          try {
+            let content = await readFile(absPath, 'utf-8');
+            const remaining = MAX_CONTEXT_CHARS - totalLen;
+            if (content.length > remaining) {
+              content = content.slice(0, remaining);
+              const lastNl = content.lastIndexOf('\n');
+              if (lastNl > 0) content = content.slice(0, lastNl);
+            }
+            parts.push(`### ${relPath}\n\n${content.trim()}`);
+            totalLen += content.length;
+          } catch (err) {
+            const e = err as NodeJS.ErrnoException;
+            if (e.code === 'ENOENT') {
+              getLog().warn({ relPath, codebase: codebase.name }, 'context_file_not_found');
+            } else {
+              getLog().warn(
+                { relPath, err: e, codebase: codebase.name },
+                'context_file_read_error'
+              );
+            }
+          }
+        }
+        if (parts.length > 0) {
+          projectContextContent = parts.join('\n\n---\n\n');
+        }
+      }
+    }
+
     const fullPrompt = buildFullPrompt(
       conversation,
       codebases,
@@ -821,7 +869,8 @@ export async function handleMessage(
       message,
       issueContext,
       threadContext,
-      attachedFiles
+      attachedFiles,
+      projectContextContent
     );
     const cwd = getArchonWorkspacesPath();
 
