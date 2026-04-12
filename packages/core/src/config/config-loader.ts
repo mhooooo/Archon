@@ -470,6 +470,20 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.envVars = { ...result.envVars, ...repo.env };
   }
 
+  // Propagate context files for prompt injection
+  if (repo.contextFiles?.length) {
+    const safe = repo.contextFiles.filter(p => {
+      if (p.startsWith('/') || p.includes('..')) {
+        getLog().warn({ path: p, repoPath: 'contextFiles' }, 'config.context_file_path_rejected');
+        return false;
+      }
+      return true;
+    });
+    if (safe.length > 0) {
+      result.contextFiles = safe;
+    }
+  }
+
   return result;
 }
 

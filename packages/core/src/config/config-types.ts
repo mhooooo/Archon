@@ -220,6 +220,12 @@ export interface RepoConfig {
   env?: Record<string, string>;
 
   /**
+   * Files whose content is prepended to the conversation prompt when this
+   * project is the active scope. Paths are relative to the project root.
+   */
+  contextFiles?: string[];
+
+  /**
    * Default commands/workflows configuration
    */
   defaults?: {
@@ -298,6 +304,11 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
+  /**
+   * Context files from repo config, propagated for prompt injection.
+   * Undefined when no context files are configured.
+   */
+  contextFiles?: string[];
 }
 
 /**
