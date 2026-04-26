@@ -42,7 +42,44 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    model: opus[1m]
+    provider: claude
+    model: claude-opus-4-7
+
+  # Auto-commit any pending changes left by archon-implement-tasks.
+  # The upstream skill prompt (.archon/commands/defaults/archon-implement-tasks.md)
+  # has no commit step — its success criteria are TASKS_COMPLETE / TYPES_PASS /
+  # TESTS_PASS / DEVIATIONS_DOCUMENTED / ARTIFACT_WRITTEN, with no
+  # COMMITS_EXIST. Agents reliably write files and run tests but skip
+  # `git commit`, leaving the branch empty and tripping implementation-gate.
+  # This node closes that gap deterministically.
+  - id: auto-commit
+    bash: |
+      git add -A
+      if git diff --cached --quiet; then
+        echo "auto-commit: nothing to commit (clean tree)"
+      else
+        git commit -m "feat: archon-implement-tasks output (auto-committed)"
+        echo "auto-commit: committed $(git rev-list --count "$BASE_BRANCH"..HEAD) total ahead of $BASE_BRANCH"
+      fi
+    depends_on: [implement-tasks]
+    timeout: 30000
+
+  # Fail fast if even after auto-commit there are zero commits ahead of
+  # BASE_BRANCH — means implement-tasks left the worktree completely
+  # untouched (a different upstream failure mode worth surfacing fast,
+  # ~30s instead of ~15min through the validate / 5-agent-review cascade).
+  - id: implementation-gate
+    bash: |
+      count=$(git rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo 0)
+      if [ "$count" -eq 0 ]; then
+        echo "BLOCKED: zero commits on $(git branch --show-current) vs $BASE_BRANCH after auto-commit"
+        echo "implement-tasks produced no file changes at all — see node logs."
+        exit 1
+      fi
+      echo "OK: $count commit(s) ahead of $BASE_BRANCH"
+    depends_on: [auto-commit]
+    timeout: 30000
+
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE
@@ -50,7 +87,7 @@ nodes:
 
   - id: validate
     command: archon-validate
-    depends_on: [implement-tasks]
+    depends_on: [implementation-gate]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════════

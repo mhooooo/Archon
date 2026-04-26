@@ -133,7 +133,8 @@ nodes:
     command: archon-fix-issue
     depends_on: [bridge-artifacts]
     context: fresh
-    model: opus[1m]
+    provider: claude
+    model: claude-opus-4-7
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 5: VALIDATE
