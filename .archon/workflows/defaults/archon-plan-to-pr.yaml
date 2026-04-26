@@ -42,7 +42,8 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    model: opus[1m]
+    provider: claude
+    model: claude-opus-4-7
 
   # Fail fast if implement-tasks produced zero commits — prevents the
   # downstream 5-agent review pipeline from burning tokens against an
