@@ -207,7 +207,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: execute-refactor
-    model: claude-opus-4-6[1m]
+    provider: claude
+    model: claude-opus-4-7
     prompt: |
       You are executing a refactoring plan with strict safety guardrails.
 
