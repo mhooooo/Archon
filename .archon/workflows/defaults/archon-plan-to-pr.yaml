@@ -151,6 +151,8 @@ nodes:
     command: archon-implement-review-fixes
     depends_on: [synthesize]
     context: fresh
+    provider: claude
+    model: claude-opus-4-7
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 8: FINAL SUMMARY & FOLLOW-UP
