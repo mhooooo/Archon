@@ -64,9 +64,14 @@ nodes:
   # This node closes that gap deterministically.
   - id: auto-commit
     bash: |
-      git add -A
+      # Stage everything except vault paths — vault writers (knowledge_compile,
+      # live-indexer, drafter workflows) run inside the worktree's working copy
+      # and write to mhoooo/Memory/. These auto-writes shouldn't ride into the
+      # PR; they conflict with main's parallel writers (vault_backup race
+      # gotcha — see moo-second-brain memory feedback_archon_worktree_writes_vault).
+      git add -A -- ':!mhoooo/Memory/**'
       if git diff --cached --quiet; then
-        echo "auto-commit: nothing to commit (clean tree)"
+        echo "auto-commit: nothing to commit (clean tree, vault excluded)"
       else
         git commit -m "feat: archon-implement-tasks output (auto-committed)"
         echo "auto-commit: committed $(git rev-list --count "$BASE_BRANCH"..HEAD) total ahead of $BASE_BRANCH"
