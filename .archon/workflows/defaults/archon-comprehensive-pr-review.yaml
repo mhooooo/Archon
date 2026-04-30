@@ -13,36 +13,63 @@ description: |
 nodes:
   - id: scope
     command: archon-pr-review-scope
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [scope]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
