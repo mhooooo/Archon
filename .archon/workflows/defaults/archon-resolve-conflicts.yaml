@@ -13,3 +13,6 @@ description: |
 nodes:
   - id: resolve
     command: archon-resolve-merge-conflicts
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
