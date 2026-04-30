@@ -13,7 +13,8 @@ description: |
   Based on Anthropic's harness design article for long-running application development.
   Separates planning, building, and evaluation into distinct roles with adversarial tension.
 provider: claude
-model: sonnet
+model: claude-opus-4-7
+effort: max
 
 nodes:
   # ─── Phase 1: Planning ───────────────────────────────────────────────
@@ -58,6 +59,9 @@ nodes:
       IMPORTANT: Write the spec to `$ARTIFACTS_DIR/spec.md` using the Write tool. Do NOT just output
       it as conversation text.
     allowed_tools: [Read, Write, Glob, Grep]
+    provider: claude
+    model: claude-opus-4-7
+    effort: max
 
   # ─── Phase 2: Workspace Initialization ───────────────────────────────
   - id: init-workspace
@@ -302,6 +306,7 @@ nodes:
         grep -qE '"status"\s*:\s*"(complete|failed)"' "$ARTIFACTS_DIR/state.json"
 
   # ─── Phase 4: Report ─────────────────────────────────────────────────
+    effort: max
   - id: report
     depends_on: [adversarial-sprint]
     trigger_rule: all_done
@@ -343,3 +348,5 @@ nodes:
       Write this report to `$ARTIFACTS_DIR/report.md` AND output it as your response so the user
       sees it directly.
     allowed_tools: [Read, Write, Glob, Grep]
+    provider: claude
+    effort: max
