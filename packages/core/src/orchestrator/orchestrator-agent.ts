@@ -347,6 +347,80 @@ async function dispatchOrchestratorWorkflow(
   }
 }
 
+// ─── Supervised-Autonomous Dispatch ─────────────────────────────────────────
+
+/**
+ * Directly dispatch a pre-approved workflow without going through the AI router.
+ * Called by the Slack "go" trigger handler after Moo approves a heartbeat proposal.
+ *
+ * Trust model: caller must verify user authorization before invoking this.
+ * Never call from unsupervised contexts.
+ */
+export async function dispatchApprovedWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  workflowName: string,
+  codebaseName: string,
+  userMessage: string,
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<void> {
+  const log = getLog();
+
+  const conversation = await db.getOrCreateConversation(platform.getPlatformType(), conversationId);
+
+  const codebases = await codebaseDb.listCodebases();
+  const codebase = findCodebaseByName(codebases, codebaseName);
+  if (!codebase) {
+    await platform.sendMessage(
+      conversationId,
+      `Project \`${codebaseName}\` not found. Check registered codebases.`
+    );
+    log.warn({ codebaseName, conversationId }, 'go_dispatch_codebase_not_found');
+    return;
+  }
+
+  await db.updateConversation(conversation.id, {
+    codebase_id: codebase.id,
+  });
+
+  const { workflows: workflowsWithSource, errors } = await discoverWorkflowsWithConfig(
+    codebase.default_cwd,
+    loadConfig
+  );
+  if (errors.length > 0) {
+    log.warn(
+      { errorCount: errors.length, errors, codebaseName, conversationId },
+      'go_dispatch_workflow_discovery_errors'
+    );
+  }
+
+  const workflows = workflowsWithSource.map(ws => ws.workflow);
+  const workflow = findWorkflow(workflowName, workflows);
+  if (!workflow) {
+    await platform.sendMessage(
+      conversationId,
+      `Workflow \`${workflowName}\` not found in \`${codebaseName}\`. Check \`.archon/workflows/\`.`
+    );
+    log.warn({ workflowName, codebaseName, conversationId }, 'go_dispatch_workflow_not_found');
+    return;
+  }
+
+  log.info(
+    { workflowName, codebaseName, conversationId },
+    'go_dispatch_approved_workflow_starting'
+  );
+
+  await dispatchOrchestratorWorkflow(
+    platform,
+    conversationId,
+    conversation,
+    codebase,
+    workflow,
+    userMessage,
+    isolationHints
+  );
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
 async function tryPersistSessionId(
