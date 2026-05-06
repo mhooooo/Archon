@@ -33,14 +33,11 @@ import type { NodeConfig } from '../../types';
  * Archon's common surface includes 'off' (from Codex's modelReasoningEffort)
  * and 'max' (from Claude's EffortLevel enum). Map into Pi's vocabulary:
  *  - 'off'    → undefined (no explicit thinkingLevel; Pi's implicit off)
- *  - 'max'    → 'xhigh'  (Archon's EffortLevel doesn't have xhigh)
+ *  - 'max'    → 'xhigh'
  *  - others pass through if they're already Pi-native
  *
  * See packages/workflows/src/schemas/dag-node.ts#effortLevelSchema for
- * the Archon schema enum (`low | medium | high | max`). Workflow YAML can
- * only carry Archon-enum values; Pi-native `minimal` / `xhigh` are accepted
- * here for programmatic callers (orchestrator, tests) that bypass the
- * schema validator.
+ * the Archon schema enum (`low | medium | high | xhigh | max`).
  */
 const PI_NATIVE_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
   'minimal',

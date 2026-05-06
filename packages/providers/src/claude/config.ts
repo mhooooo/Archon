@@ -7,7 +7,7 @@ import type { ClaudeProviderDefaults } from '../types';
 // Re-export so consumers can import the type from either location
 export type { ClaudeProviderDefaults } from '../types';
 
-const CLAUDE_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'max']);
+const CLAUDE_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 /**
  * Parse raw assistantConfig into typed Claude defaults.

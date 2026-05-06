@@ -10,7 +10,7 @@ export interface ClaudeProviderDefaults {
   [key: string]: unknown;
   model?: string;
   /** Claude Agent SDK effort level. Node/workflow config can still override. */
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
    *  @default ['project']
    */
