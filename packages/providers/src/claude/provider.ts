@@ -603,6 +603,7 @@ function buildBaseClaudeOptions(
     ...(isJsExecutable ? { executableArgs: ['--no-env-file'] } : {}),
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
+    ...(assistantDefaults.effort !== undefined ? { effort: assistantDefaults.effort } : {}),
     abortController: controller,
     ...(requestOptions?.outputFormat !== undefined
       ? { outputFormat: requestOptions.outputFormat }
