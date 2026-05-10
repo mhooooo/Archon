@@ -29,9 +29,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: SETUP
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: plan-setup
     command: archon-plan-setup
@@ -41,9 +40,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 2: CONFIRM PLAN
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: confirm-plan
     command: archon-confirm-plan
@@ -53,16 +51,13 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 3: IMPLEMENT
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: implement-tasks
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
 
   # Auto-commit any pending changes left by archon-implement-tasks.
   # The upstream skill prompt (.archon/commands/defaults/archon-implement-tasks.md)
@@ -72,6 +67,7 @@ nodes:
   # `git commit`, leaving the branch empty and tripping implementation-gate.
   # This node closes that gap deterministically.
     effort: max
+    modelReasoningEffort: xhigh
   - id: auto-commit
     bash: |
       # Stage everything except vault paths — vault writers (knowledge_compile,
@@ -118,9 +114,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 5: FINALIZE PR
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: finalize-pr
     command: archon-finalize-pr
@@ -130,9 +125,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6: CODE REVIEW
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: verify-pr-base
     bash: |
@@ -152,57 +146,50 @@ nodes:
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: synthesize
     command: archon-synthesize-review
@@ -213,26 +200,23 @@ nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 7: FIX REVIEW ISSUES
   # ═══════════════════════════════════════════════════════════════════
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 8: FINAL SUMMARY & FOLLOW-UP
   # ═══════════════════════════════════════════════════════════════════
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: workflow-summary
     command: archon-workflow-summary
     depends_on: [implement-fixes]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh

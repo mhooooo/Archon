@@ -13,16 +13,14 @@ description: |
 nodes:
   - id: scope
     command: archon-pr-review-scope
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [scope]
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: classify
     prompt: |
@@ -86,54 +84,49 @@ nodes:
         - reasoning
     provider: claude
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_code_review == 'true'"
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_error_handling == 'true'"
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_test_coverage == 'true'"
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_comment_quality == 'true'"
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_docs_impact == 'true'"
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
 
   - id: implement-fixes
     command: archon-implement-review-fixes
@@ -141,9 +134,8 @@ nodes:
 
   # Optional: push notification when review completes.
   # To enable, create .archon/mcp/ntfy.json — see docs/mcp-servers.md
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh
   - id: check-ntfy
     bash: "test -f .archon/mcp/ntfy.json && echo 'true' || echo 'false'"
     depends_on: [implement-fixes]
@@ -167,6 +159,5 @@ nodes:
       - title: "PR Review Complete"
       - message: 1-2 sentence summary — verdict and issue count. Short enough for a lock screen.
       - priority: 3 if ready to merge, 4 if needs fixes, 5 if critical issues remain
-    provider: claude
-    model: claude-opus-4-7
     effort: max
+    modelReasoningEffort: xhigh

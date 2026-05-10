@@ -40,6 +40,7 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  ModelReasoningEffort,
 } from './schemas';
 import {
   isBashNode,
@@ -149,10 +150,36 @@ export async function loadConfiguredMcpServerNames(
 /** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
+  modelReasoningEffort?: ModelReasoningEffort;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+}
+
+const CODEX_EFFORT_TO_MODEL_REASONING_EFFORT: Record<EffortLevel, ModelReasoningEffort> = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'xhigh',
+};
+
+function codexReasoningFromEffort(
+  effort: EffortLevel | undefined
+): ModelReasoningEffort | undefined {
+  return effort ? CODEX_EFFORT_TO_MODEL_REASONING_EFFORT[effort] : undefined;
+}
+
+function resolveCodexModelReasoningEffort(
+  nodeEffort: EffortLevel | undefined,
+  workflowLevelOptions: WorkflowLevelOptions
+): ModelReasoningEffort | undefined {
+  return (
+    codexReasoningFromEffort(nodeEffort) ??
+    workflowLevelOptions.modelReasoningEffort ??
+    codexReasoningFromEffort(workflowLevelOptions.effort)
+  );
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -366,6 +393,11 @@ async function resolveNodeProviderAndModel(
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
+  const effectiveEffort = node.effort ?? workflowLevelOptions.effort;
+  const codexModelReasoningEffort =
+    provider === 'codex'
+      ? resolveCodexModelReasoningEffort(node.effort, workflowLevelOptions)
+      : undefined;
 
   // Capability warnings — inform users when features are unsupported
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
@@ -378,7 +410,11 @@ async function resolveNodeProviderAndModel(
     ['mcp', 'mcp', node.mcp !== undefined],
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
-    ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
+    [
+      'effort',
+      'effortControl',
+      effectiveEffort !== undefined && !(provider === 'codex' && codexModelReasoningEffort),
+    ],
     ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
@@ -449,7 +485,7 @@ async function resolveNodeProviderAndModel(
     agents: node.agents,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
-    effort: node.effort ?? workflowLevelOptions.effort,
+    effort: effectiveEffort,
     thinking: node.thinking ?? workflowLevelOptions.thinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
@@ -460,7 +496,13 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  const assistantConfig =
+    codexModelReasoningEffort && provider === 'codex'
+      ? {
+          ...(config.assistants[provider] ?? {}),
+          modelReasoningEffort: codexModelReasoningEffort,
+        }
+      : (config.assistants[provider] ?? {});
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1689,6 +1731,7 @@ async function executeScriptNode(
 function buildLoopNodeOptions(
   provider: string,
   model: string | undefined,
+  node: LoopNode,
   config: WorkflowConfig,
   workflowLevelOptions?: WorkflowLevelOptions
 ): SendQueryOptions {
@@ -1700,9 +1743,19 @@ function buildLoopNodeOptions(
   options.assistantConfig = config.assistants[provider] ?? {};
   // Pass workflow-level options as nodeConfig so providers can apply them
   if (workflowLevelOptions) {
+    const codexModelReasoningEffort =
+      provider === 'codex'
+        ? resolveCodexModelReasoningEffort(node.effort, workflowLevelOptions)
+        : undefined;
+    if (codexModelReasoningEffort) {
+      options.assistantConfig = {
+        ...(options.assistantConfig ?? {}),
+        modelReasoningEffort: codexModelReasoningEffort,
+      };
+    }
     options.nodeConfig = {
-      effort: workflowLevelOptions.effort,
-      thinking: workflowLevelOptions.thinking,
+      effort: node.effort ?? workflowLevelOptions.effort,
+      thinking: node.thinking ?? workflowLevelOptions.thinking,
       sandbox: workflowLevelOptions.sandbox,
       betas: workflowLevelOptions.betas,
       fallbackModel: workflowLevelOptions.fallbackModel,
@@ -1771,6 +1824,7 @@ async function executeLoopNode(
   const resolvedOptions = buildLoopNodeOptions(
     workflowProvider,
     workflowModel,
+    node,
     config,
     workflowLevelOptions
   );
@@ -2499,6 +2553,7 @@ export async function executeDagWorkflow(
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
     effort: workflow.effort,
+    modelReasoningEffort: workflow.modelReasoningEffort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,

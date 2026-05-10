@@ -5717,7 +5717,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('max');
   });
 
-  it('warns user when Codex node has Claude-only options (effort)', async () => {
+  it('maps legacy Codex node effort to modelReasoningEffort without warning', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -5735,7 +5735,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       testDir,
       {
         name: 'codex-claude-opts-test',
-        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', effort: 'high' }],
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', effort: 'max' }],
       },
       workflowRun,
       'codex',
@@ -5747,10 +5747,15 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       { ...minimalConfig, assistant: 'codex' }
     );
 
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('xhigh');
+
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const warning = messages.find(m => m.includes('effort') && m.toLowerCase().includes('codex'));
-    expect(warning).toBeDefined();
+    expect(warning).toBeUndefined();
   });
 });
 
