@@ -149,6 +149,88 @@ nodes:
     effort: max
     modelReasoningEffort: xhigh
 
+  - id: visual-audit-scope
+    runtime: bun
+    timeout: 10000
+    depends_on: [review-scope]
+    script: |
+      import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { dirname, resolve } from 'node:path';
+
+      const artifactsDir = process.env.ARTIFACTS_DIR;
+      if (!artifactsDir) {
+        process.stderr.write('visual-audit-scope: ARTIFACTS_DIR is not set\n');
+        process.exit(1);
+      }
+
+      const scopePath = resolve(artifactsDir, 'review', 'scope.md');
+      const artifactPath = resolve(artifactsDir, 'review', 'visual-audit-scope.json');
+      if (!existsSync(scopePath)) {
+        process.stderr.write(`visual-audit-scope: missing scope manifest at ${scopePath}\n`);
+        process.exit(1);
+      }
+
+      const pathExtRe = /\.(tsx|jsx|ts|js|css|scss|sass|html|vue|svelte)$/i;
+      const loosePathRe =
+        /(?:^|[\s|([>])((?:\.?\/)?(?:src|app|pages|components|styles|public|packages|apps)[A-Za-z0-9_./@+-]*\.(?:tsx|jsx|ts|js|css|scss|sass|html|vue|svelte)|index\.html)/gm;
+
+      function normalizePath(value) {
+        return String(value ?? '')
+          .trim()
+          .replace(/^['"`]+|['"`]+$/g, '')
+          .replace(/[),.;:]+$/g, '')
+          .replace(/\\/g, '/')
+          .replace(/^\.\//, '');
+      }
+
+      function isPathLike(value) {
+        return Boolean(value && !value.includes('://') && !value.includes('$') && !/\s/.test(value) && (value === 'index.html' || pathExtRe.test(value)));
+      }
+
+      function isUiFile(path) {
+        const p = normalizePath(path);
+        if (!isPathLike(p)) return false;
+        if (/(^|\/)(__tests__|test|tests|spec|specs|fixtures|mocks|snapshots?)\//i.test(p)) return false;
+        if (/\.(test|spec|stories)\.(tsx|jsx|ts|js)$/i.test(p)) return false;
+        if (/\.d\.ts$/i.test(p) || /(^|\/)generated-osdk\.ts$/i.test(p) || /(^|\/)dist\//i.test(p)) return false;
+        if (p === 'index.html' || p.endsWith('/index.html')) return true;
+        if (/^src\/(main|App)\.(tsx|jsx)$/i.test(p)) return true;
+        if (/^src\/(routes|pages|components|widgets)\//i.test(p) && /\.(tsx|jsx|css|scss|sass)$/i.test(p)) return true;
+        if (/^src\/.*\.(css|scss|sass)$/i.test(p)) return true;
+        if (/^(app|pages|components|styles)\//i.test(p) && /\.(tsx|jsx|css|scss|sass)$/i.test(p)) return true;
+        return false;
+      }
+
+      const scopeText = readFileSync(scopePath, 'utf8');
+      const candidates = new Set();
+      for (const match of scopeText.matchAll(/`([^`\n]+)`/g)) {
+        const path = normalizePath(match[1]);
+        if (isPathLike(path)) candidates.add(path);
+      }
+      for (const match of scopeText.matchAll(loosePathRe)) {
+        const path = normalizePath(match[1]);
+        if (isPathLike(path)) candidates.add(path);
+      }
+
+      const candidateFiles = [...candidates].sort();
+      const uiFiles = candidateFiles.filter(isUiFile);
+      const result = {
+        needs_visual_audit: uiFiles.length > 0 ? 'true' : 'false',
+        evidence_required: uiFiles.length > 0 ? 'true' : 'false',
+        ui_files: uiFiles,
+        candidate_files: candidateFiles,
+        source: '$ARTIFACTS_DIR/review/scope.md',
+        reason:
+          uiFiles.length > 0
+            ? `UI files require screenshot/Playwright evidence: ${uiFiles.slice(0, 8).join(', ')}`
+            : 'No user-visible UI file patterns detected in review scope.',
+        artifact_path: artifactPath,
+      };
+
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(artifactPath, `${JSON.stringify(result, null, 2)}\n`);
+      console.log(JSON.stringify(result));
+
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
@@ -257,9 +339,10 @@ nodes:
   - id: review-routing
     runtime: bun
     timeout: 10000
-    depends_on: [review-classify]
+    depends_on: [review-classify, visual-audit-scope]
     script: |
       const decision = $review-classify.output;
+      const visualAudit = $visual-audit-scope.output;
 
       const specialistKeys = [
         'run_error_handling',
@@ -319,6 +402,8 @@ nodes:
         skipped_agents_reason: asString(decision.skipped_agents_reason),
         classifier_review_mode: asString(decision.review_mode),
         classifier_risk_level: asString(decision.risk_level),
+        needs_visual_audit: asString(visualAudit.needs_visual_audit),
+        visual_audit_reason: asString(visualAudit.reason),
       };
 
       if (reviewMode === 'full') {

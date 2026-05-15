@@ -64,6 +64,7 @@ done
 
 **Expected review artifacts** (in `runs/$WORKFLOW_ID/review/`):
 - `scope.md` - Files changed, scope limits, focus areas
+- `visual-audit-scope.json` - Deterministic UI evidence requirement flag
 - `code-review-findings.md` - Code quality issues
 - `error-handling-findings.md` - Silent failures, catch blocks
 - `test-coverage-findings.md` - Test gaps
@@ -92,6 +93,7 @@ done
 - **MEDIUM issues** - follow-up candidates
 - **LOW issues** - optional follow-ups
 - Specific recommendations by category
+- `Visual audit:` evidence lines, when `visual-audit-scope.json` says visual evidence is required
 
 **From fix-report.md**:
 - What was actually fixed
@@ -277,6 +279,12 @@ Create a PR comment with the summary:
 
 ---
 
+### Visual Audit Evidence
+
+{If `$ARTIFACTS_DIR/review/visual-audit-scope.json` has `needs_visual_audit: "true"`, preserve the exact `Visual audit:` evidence lines from review artifacts. If none exist, state `No visual audit evidence captured` and keep the HIGH missing-evidence finding visible. If not required, state `Not required by visual-audit-scope.json`.}
+
+---
+
 ### 🚀 Quick Wins Before Merge
 
 {If any quick wins identified:}
@@ -393,6 +401,12 @@ Write to `$ARTIFACTS_DIR/workflow-summary.md`:
 
 ---
 
+## Visual Audit Evidence
+
+{Copy the PR-comment Visual Audit Evidence section here. This is machine-consumed by downstream harness merge gates for UI PRs.}
+
+---
+
 ## Follow-Up Recommendations
 
 ### GitHub Issues to Create
@@ -494,4 +508,5 @@ Summary comment added to PR with:
 - **MATRIX_CREATED**: Follow-up items categorized and prioritized
 - **GITHUB_POSTED**: Summary comment on PR
 - **ARTIFACT_WRITTEN**: workflow-summary.md created
+- **VISUAL_AUDIT_SIGNAL_PRESERVED**: Required visual evidence lines or missing-evidence HIGH finding are visible in the final summary
 - **ACTIONABLE**: User has clear next steps with minimal cognitive load

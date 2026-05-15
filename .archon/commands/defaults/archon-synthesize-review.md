@@ -30,7 +30,15 @@ PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 cat $ARTIFACTS_DIR/review/scope.md
 ```
 
-### 1.3 Read All Agent Artifacts
+### 1.3 Read Visual-Audit Scope
+
+```bash
+cat $ARTIFACTS_DIR/review/visual-audit-scope.json 2>/dev/null || echo "No visual-audit scope artifact."
+```
+
+If `needs_visual_audit` is `"true"`, the consolidated review and PR comment must include `Visual audit:` evidence lines copied from code review, or must preserve the HIGH missing-evidence finding. This is a workflow-level merge-safety signal, separate from reviewer fanout size.
+
+### 1.4 Read All Agent Artifacts
 
 ```bash
 # Read each agent's findings
@@ -41,10 +49,19 @@ cat $ARTIFACTS_DIR/review/comment-quality-findings.md
 cat $ARTIFACTS_DIR/review/docs-impact-findings.md
 ```
 
+When `code-review-findings.md` contains a `## Visual Audit Evidence` section,
+preserve its `Visual audit:` lines exactly in the consolidated review and PR
+comment. These lines are machine-consumed by downstream harness gates to prove
+UI PRs had screenshot/Playwright evidence. If the section says evidence was not
+captured and `visual-audit-scope.json` says visual evidence is required, keep
+the corresponding HIGH finding visible.
+
 **PHASE_1_CHECKPOINT:**
 - [ ] PR number identified
-- [ ] All 5 agent artifacts read
+- [ ] Visual-audit scope checked
+- [ ] Available agent artifacts read
 - [ ] Findings extracted from each
+- [ ] Visual audit evidence lines preserved when present
 
 ---
 
@@ -211,6 +228,12 @@ Write to `$ARTIFACTS_DIR/review/consolidated-review.md`:
 
 ---
 
+## Visual Audit Evidence
+
+{If visual-audit-scope.json has `needs_visual_audit: "true"`, copy all `Visual audit:` lines from code-review-findings.md. Each line must include command + screenshot/trace/artifact evidence. If missing, state `No visual audit evidence captured` and ensure the HIGH missing-evidence finding remains in the report. If visual evidence is not required, state `Not required by visual-audit-scope.json`.}
+
+---
+
 ## Suggested Follow-up Issues
 
 If not addressing in this PR, create issues for:
@@ -352,6 +375,12 @@ gh pr comment {number} --body "$(cat <<'EOF'
 
 ---
 
+## Visual Audit Evidence
+
+{If visual-audit-scope.json has `needs_visual_audit: "true"`, include copied `Visual audit:` lines with command + screenshot/trace/artifact evidence. If missing, say `No visual audit evidence captured`; the HIGH missing-evidence finding above must remain visible. If not required, state `Not required by visual-audit-scope.json`.}
+
+---
+
 ## 📋 Suggested Follow-up Issues
 
 {If any MEDIUM/LOW issues should become issues}
@@ -395,3 +424,4 @@ Output only a brief confirmation (this will be posted as a comment):
 - **FINDINGS_SYNTHESIZED**: Combined, deduplicated, prioritized
 - **CONSOLIDATED_CREATED**: Master artifact written
 - **GITHUB_POSTED**: PR comment visible
+- **VISUAL_AUDIT_PRESERVED**: UI visual evidence lines are present in the PR comment or missing evidence remains a HIGH finding

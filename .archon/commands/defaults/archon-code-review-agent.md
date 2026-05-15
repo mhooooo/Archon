@@ -36,13 +36,21 @@ Note:
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as bugs or missing features!
 
-### 1.3 Get PR Diff
+### 1.3 Read Deterministic Visual-Audit Scope
+
+```bash
+cat $ARTIFACTS_DIR/review/visual-audit-scope.json 2>/dev/null || echo "No visual-audit scope artifact; fall back to changed-file detection."
+```
+
+If this JSON exists and `needs_visual_audit` is `"true"`, visual evidence is mandatory for the listed `ui_files`. This requirement is workflow-level and does not depend on whether the review fanout is minimal, targeted, or full.
+
+### 1.4 Get PR Diff
 
 ```bash
 gh pr diff {number}
 ```
 
-### 1.4 Read CLAUDE.md
+### 1.5 Read CLAUDE.md
 
 ```bash
 cat CLAUDE.md
@@ -53,6 +61,7 @@ Note all coding standards, patterns, and rules.
 **PHASE_1_CHECKPOINT:**
 - [ ] PR number identified
 - [ ] Scope loaded
+- [ ] Visual-audit scope loaded or fallback noted
 - [ ] Diff available
 - [ ] CLAUDE.md rules noted
 
@@ -113,12 +122,36 @@ grep -r "interface {Name}\|class {Name}\|type {Name}" packages/ --include="*.ts"
 3. Flag if a new utility function reimplements logic already available in a shared package.
 4. Note findings in the CLAUDE.md Compliance section with verdict: **EXTENDS** (extends existing primitive) or **DUPLICATE** (redundant with existing) or **NEW** (genuinely new, no existing primitive).
 
+### 2.6 Visual Audit for UI Changes
+
+Use `$ARTIFACTS_DIR/review/visual-audit-scope.json` as the source of truth when it exists. If `needs_visual_audit` is `"true"`, perform and document a visual audit for the listed `ui_files`. If the artifact is missing, fall back to changed-file detection: when changed files include user-visible UI paths, perform and document a visual audit.
+
+UI paths include:
+- `src/main.tsx`
+- `index.html`
+- `src/routes/**/*.tsx`
+- `src/components/**/*.tsx`
+- `src/styles/**/*.css`
+
+Exclude tests/specs and generated files such as `src/lib/generated-osdk.ts`.
+
+For UI changes:
+1. Prefer the repo's existing browser/visual commands: Playwright tests, Storybook snapshots, preview server screenshots, or the documented app-specific visual probe.
+2. Capture screenshots or traces under `$ARTIFACTS_DIR/visual-audit/` when tooling is available.
+3. Read/inspect the screenshot output before approving the UI.
+4. Add a `## Visual Audit Evidence` section to your artifact. Include at least one line beginning with `Visual audit:` that names the command and screenshot/trace/artifact path, for example:
+
+   `Visual audit: ran npx playwright test --project=chromium; screenshot $ARTIFACTS_DIR/visual-audit/chat-rail.png`
+
+5. If no visual audit can be run, file a HIGH finding titled `Missing visual audit evidence for UI changes` and explain exactly what command/artifact is needed. Do not claim the UI was visually verified without evidence.
+
 **PHASE_2_CHECKPOINT:**
 - [ ] CLAUDE.md compliance checked
 - [ ] Bugs identified
 - [ ] Quality issues noted
 - [ ] Patterns found for fixes
 - [ ] Primitive duplication checked
+- [ ] Visual audit evidence captured or missing evidence filed as HIGH when UI files changed
 
 ---
 
@@ -237,6 +270,12 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 
 ---
 
+## Visual Audit Evidence
+
+{Required when UI files changed. Include `Visual audit:` lines with command + screenshot/trace/artifact path. If unavailable, say `No visual audit evidence captured` and ensure a HIGH finding exists.}
+
+---
+
 ## Metadata
 
 - **Agent**: code-review-agent
@@ -272,6 +311,7 @@ Verify artifact contains:
 - [ ] Artifact file exists
 - [ ] Structure is complete
 - [ ] No placeholder text remaining
+- [ ] UI PRs include Visual Audit Evidence or a HIGH missing-evidence finding
 
 ---
 
@@ -282,3 +322,4 @@ Verify artifact contains:
 - **ARTIFACT_CREATED**: Findings file written
 - **PATTERNS_INCLUDED**: Each finding references codebase patterns
 - **OPTIONS_PROVIDED**: Multiple fix options where applicable
+- **VISUAL_AUDIT_HANDLED**: UI diffs include visual evidence or an explicit HIGH missing-evidence finding
