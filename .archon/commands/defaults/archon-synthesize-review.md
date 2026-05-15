@@ -38,7 +38,40 @@ cat $ARTIFACTS_DIR/review/visual-audit-scope.json 2>/dev/null || echo "No visual
 
 If `needs_visual_audit` is `"true"`, the consolidated review and PR comment must include `Visual audit:` evidence lines copied from code review, or must preserve the HIGH missing-evidence finding. This is a workflow-level merge-safety signal, separate from reviewer fanout size.
 
-### 1.4 Read All Agent Artifacts
+### 1.4 Verify Required Agent Artifacts
+
+The comprehensive review workflows are expected to run all five review agents.
+Do not synthesize a partial fanout as if it were complete. Before reading
+findings, verify that every required artifact exists and is non-empty:
+
+```bash
+set -e
+missing=0
+for artifact in \
+  "$ARTIFACTS_DIR/review/code-review-findings.md" \
+  "$ARTIFACTS_DIR/review/error-handling-findings.md" \
+  "$ARTIFACTS_DIR/review/test-coverage-findings.md" \
+  "$ARTIFACTS_DIR/review/comment-quality-findings.md" \
+  "$ARTIFACTS_DIR/review/docs-impact-findings.md"
+do
+  if [ ! -s "$artifact" ]; then
+    echo "MISSING_REVIEW_ARTIFACT: $artifact" >&2
+    missing=1
+  fi
+done
+
+if [ "$missing" -ne 0 ]; then
+  cat > "$ARTIFACTS_DIR/review/consolidated-review.md" <<'EOF'
+# Review Fanout Incomplete
+
+Synthesis failed because one or more required review artifacts were missing or empty.
+This PR is not merge-ready until the full five-agent review fanout completes.
+EOF
+  exit 1
+fi
+```
+
+### 1.5 Read All Agent Artifacts
 
 ```bash
 # Read each agent's findings
@@ -59,7 +92,7 @@ the corresponding HIGH finding visible.
 **PHASE_1_CHECKPOINT:**
 - [ ] PR number identified
 - [ ] Visual-audit scope checked
-- [ ] Available agent artifacts read
+- [ ] All required agent artifacts verified and read
 - [ ] Findings extracted from each
 - [ ] Visual audit evidence lines preserved when present
 

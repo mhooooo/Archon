@@ -110,6 +110,26 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
     });
 
+    it('end-to-end PR workflows should always run the full review fanout', () => {
+      for (const name of ['archon-plan-to-pr', 'archon-idea-to-pr']) {
+        const content = BUNDLED_WORKFLOWS[name];
+        expect(content).toContain('Comprehensive code review (5 parallel agents');
+        expect(content).toContain('command: archon-code-review-agent');
+        expect(content).toContain('command: archon-error-handling-agent');
+        expect(content).toContain('command: archon-test-coverage-agent');
+        expect(content).toContain('command: archon-comment-quality-agent');
+        expect(content).toContain('command: archon-docs-impact-agent');
+        expect(content).toContain('depends_on: [visual-audit-scope, sync]');
+        expect(content).toContain(
+          'depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]'
+        );
+        expect(content).toContain('trigger_rule: all_done');
+        expect(content).not.toContain('review-classify');
+        expect(content).not.toContain('review-routing');
+        expect(content).not.toContain('when: "$review-routing');
+      }
+    });
+
     it('should have valid YAML structure', () => {
       for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content).toContain('name:');

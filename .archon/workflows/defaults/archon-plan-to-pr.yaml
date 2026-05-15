@@ -2,7 +2,7 @@ name: archon-plan-to-pr
 description: |
   Use when: You have an existing implementation plan and want to execute it end-to-end.
   Input: Path to a plan file ($ARTIFACTS_DIR/plan.md or .agents/plans/*.md)
-  Output: PR ready for merge with budget-aware review completed
+  Output: PR ready for merge with comprehensive review completed
 
   Full workflow:
   1. Read plan, setup branch, extract scope limits
@@ -10,7 +10,7 @@ description: |
   3. Implement all tasks with type-checking
   4. Run full validation suite
   5. Create PR with template, mark ready
-  6. Budget-aware code review (default targeted; full 5-agent fanout only for high-risk scope)
+  6. Comprehensive code review (5 parallel agents with scope limit awareness)
   7. Synthesize and fix review findings
   8. Final summary with decision matrix -> GitHub comment + follow-up recommendations
 
@@ -226,219 +226,37 @@ nodes:
     effort: max
     modelReasoningEffort: xhigh
 
-  - id: review-classify
-    prompt: |
-      Classify review spend for this PR using the cheapest safe reviewer set.
-      Do not run tools. Use only the PR scope below.
-
-      ## PR Scope
-      $review-scope.output
-
-      ## Risk Justification Rules
-      Call a PR high risk only when you can name a concrete failure mode with
-      meaningful blast radius. Size alone is not enough. Explain:
-      - what can break
-      - who or what is affected
-      - whether the failure is hard to detect or hard to reverse
-      - why extra reviewers are worth the token spend
-
-      High-risk signals:
-      - security, auth, secrets, permission, routing, or trust-boundary changes
-      - payments, financial writes, irreversible external actions, or data loss
-      - migrations, schema changes, persistence semantics, or rollback risk
-      - concurrency, locking, daemon/runtime lifecycle, retries, or async failure paths
-      - cross-repo/generated contracts, public API/CLI/env var changes, or compatibility risk
-      - new subsystem architecture or broad refactor with unclear ownership
-      - validation failed, validation missing for changed behavior, or uncertainty is high
-
-      Low-risk signals:
-      - docs-only, tests-only, copy-only, formatting, dependency metadata, or small mechanical ports
-      - validation is green and the changed behavior is narrow and reversible
-      - no trust boundary, persistence, contract, concurrency, or external side-effect change
-
-      Review modes:
-      - minimal: code review only
-      - targeted: code review plus exactly one specialist
-      - full: all specialists, only for high risk or explicit comprehensive/5-agent request
-
-      Baseline rule:
-      - Set run_code_review to "true" for every non-empty PR.
-      - Never set all reviewer flags to "false".
-      - For targeted mode, run code review plus exactly one specialist.
-      - For full mode, run code review plus all specialists.
-
-      Specialist choice:
-      - error-handling: failure paths, retries, external services, async, concurrency, runtime
-      - test-coverage: behavior changed and tests are the dominant uncertainty
-      - comment-quality: comments/docstrings could mislead maintainers
-      - docs-impact: public API, CLI, env var, command, contract, or user-facing behavior changed
-
-      Return full only if the reasoning proves the extra spend is justified.
-    provider: codex
-    model: gpt-5.4-mini
-    effort: low
-    output_format:
-      type: object
-      additionalProperties: false
-      properties:
-        run_code_review:
-          type: string
-          enum: ["true", "false"]
-        run_error_handling:
-          type: string
-          enum: ["true", "false"]
-        run_test_coverage:
-          type: string
-          enum: ["true", "false"]
-        run_comment_quality:
-          type: string
-          enum: ["true", "false"]
-        run_docs_impact:
-          type: string
-          enum: ["true", "false"]
-        review_mode:
-          type: string
-          enum: ["minimal", "targeted", "full"]
-        risk_level:
-          type: string
-          enum: ["low", "medium", "high"]
-        complexity:
-          type: string
-          enum: ["trivial", "small", "medium", "large"]
-        dominant_risk:
-          type: string
-        reasoning:
-          type: string
-        skipped_agents_reason:
-          type: string
-      required:
-        - run_code_review
-        - run_error_handling
-        - run_test_coverage
-        - run_comment_quality
-        - run_docs_impact
-        - review_mode
-        - risk_level
-        - complexity
-        - dominant_risk
-        - reasoning
-        - skipped_agents_reason
-    depends_on: [review-scope]
-
-  - id: review-routing
-    runtime: bun
-    timeout: 10000
-    depends_on: [review-classify, visual-audit-scope]
-    script: |
-      const decision = $review-classify.output;
-      const visualAudit = $visual-audit-scope.output;
-
-      const specialistKeys = [
-        'run_error_handling',
-        'run_test_coverage',
-        'run_comment_quality',
-        'run_docs_impact',
-      ];
-
-      const validModes = new Set(['minimal', 'targeted', 'full']);
-      const validRisks = new Set(['low', 'medium', 'high']);
-      const validComplexities = new Set(['trivial', 'small', 'medium', 'large']);
-
-      const asString = value => (typeof value === 'string' ? value : String(value ?? ''));
-      const asBool = value => asString(value).toLowerCase() === 'true';
-      const enabledSpecialists = specialistKeys.filter(key => asBool(decision[key]));
-      const text = `${asString(decision.dominant_risk)} ${asString(decision.reasoning)}`.toLowerCase();
-
-      let riskLevel = validRisks.has(decision.risk_level) ? decision.risk_level : 'medium';
-      let reviewMode = validModes.has(decision.review_mode) ? decision.review_mode : null;
-
-      if (reviewMode === null) {
-        reviewMode = riskLevel === 'high' ? 'full' : enabledSpecialists.length > 0 ? 'targeted' : 'minimal';
-      }
-
-      if (riskLevel === 'high') {
-        reviewMode = 'full';
-      } else if (reviewMode === 'full') {
-        reviewMode = 'targeted';
-      }
-
-      function pickSpecialist() {
-        if (enabledSpecialists.length === 1) return enabledSpecialists[0];
-        if (text.match(/error|exception|failure|retry|async|concurr|lock|runtime|daemon|service|external/)) {
-          return 'run_error_handling';
-        }
-        if (text.match(/doc|api|cli|env|contract|command|user-facing|public/)) {
-          return 'run_docs_impact';
-        }
-        if (text.match(/comment|docstring|jsdoc|maintainer/)) {
-          return 'run_comment_quality';
-        }
-        if (enabledSpecialists.includes('run_test_coverage')) return 'run_test_coverage';
-        return enabledSpecialists[0] ?? 'run_test_coverage';
-      }
-
-      const normalized = {
-        run_code_review: 'true',
-        run_error_handling: 'false',
-        run_test_coverage: 'false',
-        run_comment_quality: 'false',
-        run_docs_impact: 'false',
-        review_mode: reviewMode,
-        risk_level: riskLevel,
-        complexity: validComplexities.has(decision.complexity) ? decision.complexity : 'medium',
-        dominant_risk: asString(decision.dominant_risk),
-        reasoning: asString(decision.reasoning),
-        skipped_agents_reason: asString(decision.skipped_agents_reason),
-        classifier_review_mode: asString(decision.review_mode),
-        classifier_risk_level: asString(decision.risk_level),
-        needs_visual_audit: asString(visualAudit.needs_visual_audit),
-        visual_audit_reason: asString(visualAudit.reason),
-      };
-
-      if (reviewMode === 'full') {
-        for (const key of specialistKeys) normalized[key] = 'true';
-      } else if (reviewMode === 'targeted') {
-        normalized[pickSpecialist()] = 'true';
-      }
-
-      console.log(JSON.stringify(normalized));
-
   - id: code-review
     command: archon-code-review-agent
-    depends_on: [review-routing, sync]
-    when: "$review-routing.output.run_code_review == 'true'"
+    depends_on: [visual-audit-scope, sync]
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: error-handling
     command: archon-error-handling-agent
-    depends_on: [review-routing, sync]
-    when: "$review-routing.output.run_error_handling == 'true'"
+    depends_on: [sync]
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: test-coverage
     command: archon-test-coverage-agent
-    depends_on: [review-routing, sync]
-    when: "$review-routing.output.run_test_coverage == 'true'"
+    depends_on: [sync]
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: comment-quality
     command: archon-comment-quality-agent
-    depends_on: [review-routing, sync]
-    when: "$review-routing.output.run_comment_quality == 'true'"
+    depends_on: [sync]
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: docs-impact
     command: archon-docs-impact-agent
-    depends_on: [review-routing, sync]
-    when: "$review-routing.output.run_docs_impact == 'true'"
+    depends_on: [sync]
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
@@ -446,7 +264,7 @@ nodes:
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
-    trigger_rule: one_success
+    trigger_rule: all_done
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════════

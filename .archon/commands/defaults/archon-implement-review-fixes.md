@@ -70,6 +70,7 @@ If consolidated doesn't have full fix code, read original artifacts:
 cat $ARTIFACTS_DIR/review/code-review-findings.md
 cat $ARTIFACTS_DIR/review/error-handling-findings.md
 cat $ARTIFACTS_DIR/review/test-coverage-findings.md
+cat $ARTIFACTS_DIR/review/comment-quality-findings.md
 cat $ARTIFACTS_DIR/review/docs-impact-findings.md
 ```
 
