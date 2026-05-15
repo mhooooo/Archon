@@ -120,38 +120,113 @@ nodes:
         - skipped_agents_reason
     depends_on: [scope]
 
+  - id: review-routing
+    runtime: bun
+    timeout: 10000
+    depends_on: [classify]
+    script: |
+      const decision = $classify.output;
+
+      const specialistKeys = [
+        'run_error_handling',
+        'run_test_coverage',
+        'run_comment_quality',
+        'run_docs_impact',
+      ];
+
+      const validModes = new Set(['minimal', 'targeted', 'full']);
+      const validRisks = new Set(['low', 'medium', 'high']);
+      const validComplexities = new Set(['trivial', 'small', 'medium', 'large']);
+
+      const asString = value => (typeof value === 'string' ? value : String(value ?? ''));
+      const asBool = value => asString(value).toLowerCase() === 'true';
+      const enabledSpecialists = specialistKeys.filter(key => asBool(decision[key]));
+      const text = `${asString(decision.dominant_risk)} ${asString(decision.reasoning)}`.toLowerCase();
+
+      let riskLevel = validRisks.has(decision.risk_level) ? decision.risk_level : 'medium';
+      let reviewMode = validModes.has(decision.review_mode) ? decision.review_mode : null;
+
+      if (reviewMode === null) {
+        reviewMode = riskLevel === 'high' ? 'full' : enabledSpecialists.length > 0 ? 'targeted' : 'minimal';
+      }
+
+      if (riskLevel === 'high') {
+        reviewMode = 'full';
+      } else if (reviewMode === 'full') {
+        reviewMode = 'targeted';
+      }
+
+      function pickSpecialist() {
+        if (enabledSpecialists.length === 1) return enabledSpecialists[0];
+        if (text.match(/error|exception|failure|retry|async|concurr|lock|runtime|daemon|service|external/)) {
+          return 'run_error_handling';
+        }
+        if (text.match(/doc|api|cli|env|contract|command|user-facing|public/)) {
+          return 'run_docs_impact';
+        }
+        if (text.match(/comment|docstring|jsdoc|maintainer/)) {
+          return 'run_comment_quality';
+        }
+        if (enabledSpecialists.includes('run_test_coverage')) return 'run_test_coverage';
+        return enabledSpecialists[0] ?? 'run_test_coverage';
+      }
+
+      const normalized = {
+        run_code_review: 'true',
+        run_error_handling: 'false',
+        run_test_coverage: 'false',
+        run_comment_quality: 'false',
+        run_docs_impact: 'false',
+        review_mode: reviewMode,
+        risk_level: riskLevel,
+        complexity: validComplexities.has(decision.complexity) ? decision.complexity : 'medium',
+        dominant_risk: asString(decision.dominant_risk),
+        reasoning: asString(decision.reasoning),
+        skipped_agents_reason: asString(decision.skipped_agents_reason),
+        classifier_review_mode: asString(decision.review_mode),
+        classifier_risk_level: asString(decision.risk_level),
+      };
+
+      if (reviewMode === 'full') {
+        for (const key of specialistKeys) normalized[key] = 'true';
+      } else if (reviewMode === 'targeted') {
+        normalized[pickSpecialist()] = 'true';
+      }
+
+      console.log(JSON.stringify(normalized));
+
   - id: code-review
     command: archon-code-review-agent
-    depends_on: [classify, sync]
-    when: "$classify.output.run_code_review == 'true'"
+    depends_on: [review-routing, sync]
+    when: "$review-routing.output.run_code_review == 'true'"
     effort: max
     modelReasoningEffort: xhigh
 
   - id: error-handling
     command: archon-error-handling-agent
-    depends_on: [classify, sync]
-    when: "$classify.output.run_error_handling == 'true'"
+    depends_on: [review-routing, sync]
+    when: "$review-routing.output.run_error_handling == 'true'"
     effort: max
     modelReasoningEffort: xhigh
 
   - id: test-coverage
     command: archon-test-coverage-agent
-    depends_on: [classify, sync]
-    when: "$classify.output.run_test_coverage == 'true'"
+    depends_on: [review-routing, sync]
+    when: "$review-routing.output.run_test_coverage == 'true'"
     effort: max
     modelReasoningEffort: xhigh
 
   - id: comment-quality
     command: archon-comment-quality-agent
-    depends_on: [classify, sync]
-    when: "$classify.output.run_comment_quality == 'true'"
+    depends_on: [review-routing, sync]
+    when: "$review-routing.output.run_comment_quality == 'true'"
     effort: max
     modelReasoningEffort: xhigh
 
   - id: docs-impact
     command: archon-docs-impact-agent
-    depends_on: [classify, sync]
-    when: "$classify.output.run_docs_impact == 'true'"
+    depends_on: [review-routing, sync]
+    when: "$review-routing.output.run_docs_impact == 'true'"
     effort: max
     modelReasoningEffort: xhigh
 
