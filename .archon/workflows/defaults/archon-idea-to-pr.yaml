@@ -2,7 +2,7 @@ name: archon-idea-to-pr
 description: |
   Use when: You have a feature idea or description and want end-to-end development.
   Input: Feature description in natural language, or path to a PRD file
-  Output: PR ready for merge with comprehensive review completed
+  Output: PR ready for merge with budget-aware review completed
 
   Full workflow:
   1. Create comprehensive implementation plan with codebase analysis
@@ -11,7 +11,7 @@ description: |
   4. Implement all tasks with type-checking
   5. Run full validation suite
   6. Create PR with template, mark ready
-  7. Comprehensive code review (5 parallel agents with scope limit awareness)
+  7. Budget-aware code review (default targeted; full 5-agent fanout only for high-risk scope)
   8. Synthesize and fix review findings
   9. Final summary with decision matrix -> GitHub comment + follow-up recommendations
 
@@ -156,37 +156,140 @@ nodes:
     effort: max
     modelReasoningEffort: xhigh
 
+  - id: review-classify
+    prompt: |
+      Classify review spend for this PR using the cheapest safe reviewer set.
+      Do not run tools. Use only the PR scope below.
+
+      ## PR Scope
+      $review-scope.output
+
+      ## Risk Justification Rules
+      Call a PR high risk only when you can name a concrete failure mode with
+      meaningful blast radius. Size alone is not enough. Explain:
+      - what can break
+      - who or what is affected
+      - whether the failure is hard to detect or hard to reverse
+      - why extra reviewers are worth the token spend
+
+      High-risk signals:
+      - security, auth, secrets, permission, routing, or trust-boundary changes
+      - payments, financial writes, irreversible external actions, or data loss
+      - migrations, schema changes, persistence semantics, or rollback risk
+      - concurrency, locking, daemon/runtime lifecycle, retries, or async failure paths
+      - cross-repo/generated contracts, public API/CLI/env var changes, or compatibility risk
+      - new subsystem architecture or broad refactor with unclear ownership
+      - validation failed, validation missing for changed behavior, or uncertainty is high
+
+      Low-risk signals:
+      - docs-only, tests-only, copy-only, formatting, dependency metadata, or small mechanical ports
+      - validation is green and the changed behavior is narrow and reversible
+      - no trust boundary, persistence, contract, concurrency, or external side-effect change
+
+      Review modes:
+      - minimal: code review only
+      - targeted: code review plus exactly one specialist
+      - full: all specialists, only for high risk or explicit comprehensive/5-agent request
+
+      Baseline rule:
+      - Set run_code_review to "true" for every non-empty PR.
+      - Never set all reviewer flags to "false".
+      - For targeted mode, run code review plus exactly one specialist.
+      - For full mode, run code review plus all specialists.
+
+      Specialist choice:
+      - error-handling: failure paths, retries, external services, async, concurrency, runtime
+      - test-coverage: behavior changed and tests are the dominant uncertainty
+      - comment-quality: comments/docstrings could mislead maintainers
+      - docs-impact: public API, CLI, env var, command, contract, or user-facing behavior changed
+
+      Return full only if the reasoning proves the extra spend is justified.
+    provider: codex
+    model: gpt-5.4-mini
+    effort: low
+    output_format:
+      type: object
+      properties:
+        run_code_review:
+          type: string
+          enum: ["true", "false"]
+        run_error_handling:
+          type: string
+          enum: ["true", "false"]
+        run_test_coverage:
+          type: string
+          enum: ["true", "false"]
+        run_comment_quality:
+          type: string
+          enum: ["true", "false"]
+        run_docs_impact:
+          type: string
+          enum: ["true", "false"]
+        review_mode:
+          type: string
+          enum: ["minimal", "targeted", "full"]
+        risk_level:
+          type: string
+          enum: ["low", "medium", "high"]
+        complexity:
+          type: string
+          enum: ["trivial", "small", "medium", "large"]
+        dominant_risk:
+          type: string
+        reasoning:
+          type: string
+        skipped_agents_reason:
+          type: string
+      required:
+        - run_code_review
+        - run_error_handling
+        - run_test_coverage
+        - run_comment_quality
+        - run_docs_impact
+        - review_mode
+        - risk_level
+        - complexity
+        - dominant_risk
+        - reasoning
+        - skipped_agents_reason
+    depends_on: [review-scope]
+
   - id: code-review
     command: archon-code-review-agent
-    depends_on: [sync]
+    depends_on: [review-classify, sync]
+    when: "$review-classify.output.run_code_review == 'true'"
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: error-handling
     command: archon-error-handling-agent
-    depends_on: [sync]
+    depends_on: [review-classify, sync]
+    when: "$review-classify.output.run_error_handling == 'true'"
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: test-coverage
     command: archon-test-coverage-agent
-    depends_on: [sync]
+    depends_on: [review-classify, sync]
+    when: "$review-classify.output.run_test_coverage == 'true'"
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: comment-quality
     command: archon-comment-quality-agent
-    depends_on: [sync]
+    depends_on: [review-classify, sync]
+    when: "$review-classify.output.run_comment_quality == 'true'"
     context: fresh
     effort: max
     modelReasoningEffort: xhigh
 
   - id: docs-impact
     command: archon-docs-impact-agent
-    depends_on: [sync]
+    depends_on: [review-classify, sync]
+    when: "$review-classify.output.run_docs_impact == 'true'"
     context: fresh
     effort: max
     modelReasoningEffort: xhigh

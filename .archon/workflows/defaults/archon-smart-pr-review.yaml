@@ -3,12 +3,12 @@ description: |
   Use when: User wants a smart, efficient PR review that adapts to PR complexity.
   Triggers: "smart review", "review this PR", "review PR #123", "efficient review",
             "smart PR review", "quick review".
-  Does: Gathers PR scope -> classifies complexity -> routes to only relevant review agents ->
+  Does: Gathers PR scope -> classifies cost/risk -> routes to only relevant review agents ->
         synthesizes findings -> auto-fixes CRITICAL/HIGH issues.
   NOT for: When you explicitly want ALL review agents (use archon-comprehensive-pr-review instead).
 
-  Unlike the comprehensive review, this workflow classifies the PR first and only runs
-  the review agents that are relevant. A 3-line typo fix skips test-coverage and docs-impact.
+  Unlike the comprehensive review, this workflow classifies the PR first and runs the
+  cheapest useful review set. A 3-line typo fix skips specialist agents entirely.
 
 nodes:
   - id: scope
@@ -24,33 +24,55 @@ nodes:
 
   - id: classify
     prompt: |
-      You are a PR complexity classifier. Analyze the PR scope below and determine
-      which review agents should run.
+      Classify review spend for this PR using the cheapest safe reviewer set.
+      Do not run tools. Use only the PR scope below.
 
       ## PR Scope
       $scope.output
 
-      ## Rules
-      - **Code review**: Always run unless the diff is empty or only touches non-code files
-        (e.g. README-only, config-only, or .yaml-only changes).
-      - **Error handling**: Run if the diff touches code with try/catch, error handling,
-        async/await, or adds new failure paths.
-      - **Test coverage**: Run if the diff touches source code (not just tests, docs, or config).
-      - **Comment quality**: Run if the diff adds or modifies comments, docstrings, JSDoc,
-        or significant documentation within code files.
-      - **Docs impact**: Run if the diff adds/removes/renames public APIs, commands, CLI flags,
-        environment variables, or user-facing features.
+      ## Risk Justification Rules
+      Call a PR high risk only when you can name a concrete failure mode with
+      meaningful blast radius. Size alone is not enough. Explain:
+      - what can break
+      - who or what is affected
+      - whether the failure is hard to detect or hard to reverse
+      - why extra reviewers are worth the token spend
 
-      Classify the PR complexity:
-      - **trivial**: Typo fixes, formatting, single-line changes, version bumps
-      - **small**: 1-3 files, straightforward logic, no architectural changes
-      - **medium**: 4-10 files, moderate logic changes, some cross-cutting concerns
-      - **large**: 10+ files, architectural changes, new subsystems, complex refactors
+      High-risk signals:
+      - security, auth, secrets, permission, routing, or trust-boundary changes
+      - payments, financial writes, irreversible external actions, or data loss
+      - migrations, schema changes, persistence semantics, or rollback risk
+      - concurrency, locking, daemon/runtime lifecycle, retries, or async failure paths
+      - cross-repo/generated contracts, public API/CLI/env var changes, or compatibility risk
+      - new subsystem architecture or broad refactor with unclear ownership
+      - validation failed, validation missing for changed behavior, or uncertainty is high
 
-      Provide your reasoning for each decision.
-    depends_on: [scope]
-    model: haiku
-    allowed_tools: []
+      Low-risk signals:
+      - docs-only, tests-only, copy-only, formatting, dependency metadata, or small mechanical ports
+      - validation is green and the changed behavior is narrow and reversible
+      - no trust boundary, persistence, contract, concurrency, or external side-effect change
+
+      Review modes:
+      - minimal: code review only
+      - targeted: code review plus exactly one specialist
+      - full: all specialists, only for high risk or explicit comprehensive/5-agent request
+
+      Baseline rule:
+      - Set run_code_review to "true" for every non-empty PR.
+      - Never set all reviewer flags to "false".
+      - For targeted mode, run code review plus exactly one specialist.
+      - For full mode, run code review plus all specialists.
+
+      Specialist choice:
+      - error-handling: failure paths, retries, external services, async, concurrency, runtime
+      - test-coverage: behavior changed and tests are the dominant uncertainty
+      - comment-quality: comments/docstrings could mislead maintainers
+      - docs-impact: public API, CLI, env var, command, contract, or user-facing behavior changed
+
+      Return full only if the reasoning proves the extra spend is justified.
+    provider: codex
+    model: gpt-5.4-mini
+    effort: low
     output_format:
       type: object
       properties:
@@ -69,10 +91,20 @@ nodes:
         run_docs_impact:
           type: string
           enum: ["true", "false"]
+        review_mode:
+          type: string
+          enum: ["minimal", "targeted", "full"]
+        risk_level:
+          type: string
+          enum: ["low", "medium", "high"]
         complexity:
           type: string
           enum: ["trivial", "small", "medium", "large"]
+        dominant_risk:
+          type: string
         reasoning:
+          type: string
+        skipped_agents_reason:
           type: string
       required:
         - run_code_review
@@ -80,11 +112,13 @@ nodes:
         - run_test_coverage
         - run_comment_quality
         - run_docs_impact
+        - review_mode
+        - risk_level
         - complexity
+        - dominant_risk
         - reasoning
-    provider: claude
-    effort: max
-    modelReasoningEffort: xhigh
+        - skipped_agents_reason
+    depends_on: [scope]
 
   - id: code-review
     command: archon-code-review-agent
