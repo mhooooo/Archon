@@ -24,9 +24,9 @@ nodes:
       import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
       import { dirname, resolve } from 'node:path';
 
-      const artifactsDir = process.env.ARTIFACTS_DIR;
-      if (!artifactsDir) {
-        process.stderr.write('visual-audit-scope: ARTIFACTS_DIR is not set\n');
+      const artifactsDir = '$ARTIFACTS_DIR';
+      if (!artifactsDir || artifactsDir === '$' + 'ARTIFACTS_DIR') {
+        process.stderr.write('visual-audit-scope: ARTIFACTS_DIR interpolation failed\n');
         process.exit(1);
       }
 
