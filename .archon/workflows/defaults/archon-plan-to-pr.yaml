@@ -24,28 +24,36 @@ nodes:
   - id: plan-setup
     command: archon-plan-setup
     context: fresh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: high
+    modelReasoningEffort: high
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 2: CONFIRM PLAN
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: confirm-plan
     command: archon-confirm-plan
     depends_on: [plan-setup]
     context: fresh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: high
+    modelReasoningEffort: high
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 3: IMPLEMENT
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: implement-tasks
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
+    provider: codex
+    model: gpt-5.5
+    effort: max
+    modelReasoningEffort: xhigh
 
   # Auto-commit any pending changes left by archon-implement-tasks.
   # The upstream skill prompt (.archon/commands/defaults/archon-implement-tasks.md)
@@ -54,8 +62,6 @@ nodes:
   # COMMITS_EXIST. Agents reliably write files and run tests but skip
   # `git commit`, leaving the branch empty and tripping implementation-gate.
   # This node closes that gap deterministically.
-    effort: max
-    modelReasoningEffort: xhigh
   - id: auto-commit
     bash: |
       # Stage everything except vault paths — vault writers (knowledge_compile,
@@ -98,23 +104,27 @@ nodes:
     command: archon-validate
     depends_on: [implementation-gate]
     context: fresh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: high
+    modelReasoningEffort: high
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 5: FINALIZE PR
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: finalize-pr
     command: archon-finalize-pr
     depends_on: [validate]
     context: fresh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6: CODE REVIEW
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: verify-pr-base
     bash: |
@@ -134,8 +144,10 @@ nodes:
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: visual-audit-scope
     runtime: bun
@@ -223,13 +235,17 @@ nodes:
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [visual-audit-scope, sync]
     context: fresh
+    provider: codex
+    model: gpt-5.5
     effort: max
     modelReasoningEffort: xhigh
 
@@ -237,56 +253,70 @@ nodes:
     command: archon-error-handling-agent
     depends_on: [sync]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: all_done
     context: fresh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 7: FIX REVIEW ISSUES
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
     context: fresh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 8: FINAL SUMMARY & FOLLOW-UP
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
-    modelReasoningEffort: xhigh
 
   - id: workflow-summary
     command: archon-workflow-summary
     depends_on: [implement-fixes]
     context: fresh
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
