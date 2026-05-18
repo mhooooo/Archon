@@ -15,6 +15,14 @@ Run the complete validation suite and fix any failures.
 
 This is a focused step: run checks, fix issues, repeat until green.
 
+**Scope guard:** Validation may only change files that were already part of the
+implementation diff. Do not run repo-wide write/fix commands. In particular,
+never run `prettier --write .`, `bunx prettier --write .`, `{runner} run format`
+if it formats the whole repository, `eslint --fix .`, `biome check --write .`,
+or equivalent repository-wide mutating commands. If a formatter/linter fix is
+needed, run it only on the implementation files. If the project has no declared
+format/lint script, mark that check N/A instead of inventing a repo-wide command.
+
 ---
 
 ## Phase 1: LOAD - Get Validation Commands
@@ -77,14 +85,18 @@ Run each check in order. Fix any failures before proceeding.
 
 **If fails:**
 
-1. Try auto-fix first:
+1. Try auto-fix only if the project exposes a scoped fix command or you can
+   pass the implementation file list explicitly:
    ```bash
-   {runner} run lint:fix
+   {runner} run lint:fix -- path/to/changed-file.ts path/to/changed-file.test.ts
    ```
 
 2. Re-run lint check
 
 3. If still failing, manually fix remaining issues
+
+**If no lint script exists:** Record lint as N/A. Do not install or invoke a
+new linter.
 
 **Record result**: ✅ Pass / ❌ Fail (fixed)
 
@@ -96,15 +108,22 @@ Run each check in order. Fix any failures before proceeding.
 
 **If fails:**
 
-1. Auto-fix:
+1. Auto-fix only the implementation files:
    ```bash
-   {runner} run format
+   {runner} run format -- path/to/changed-file.ts path/to/changed-file.test.ts
    ```
 
 2. Verify fixed:
    ```bash
    {runner} run format:check
    ```
+
+**If no format script exists:** Record format as N/A. Do not run `bunx
+prettier --check .`, `prettier --write .`, or any repo-wide formatter command.
+
+**If the declared format script cannot be scoped to implementation files:** Do
+not run the mutating formatter. Record the format check as blocked with the
+specific files/command instead of normalizing unrelated files.
 
 **Record result**: ✅ Pass / ❌ Fail (fixed)
 

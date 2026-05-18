@@ -95,6 +95,21 @@ nodes:
     depends_on: [auto-commit]
     timeout: 30000
 
+  # Snapshot the implementation scope before validation gets a chance to run
+  # mutating checks. Validation may refine these files, but it must not expand
+  # the PR by accepting repo-wide formatter/linter churn.
+  - id: implementation-scope-snapshot
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      git diff --name-only "$BASE_BRANCH"..HEAD | sort -u > "$ARTIFACTS_DIR/implementation-files.txt"
+      git rev-parse HEAD > "$ARTIFACTS_DIR/implementation-head.txt"
+      count=$(wc -l < "$ARTIFACTS_DIR/implementation-files.txt" | tr -d ' ')
+      echo "implementation-scope-snapshot: $count file(s)"
+      cat "$ARTIFACTS_DIR/implementation-files.txt"
+    depends_on: [implementation-gate]
+    timeout: 30000
+
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE
@@ -102,12 +117,62 @@ nodes:
 
   - id: validate
     command: archon-validate
-    depends_on: [implementation-gate]
+    depends_on: [implementation-scope-snapshot]
     context: fresh
     provider: codex
     model: gpt-5.4-mini
     effort: high
     modelReasoningEffort: high
+
+  # Hard stop for validation-induced scope expansion. This catches the failure
+  # mode where a repo-wide formatter rewrites hundreds of unrelated files before
+  # finalize-pr and 5-agent review burn time/tokens on a contaminated diff.
+  - id: validation-scope-gate
+    bash: |
+      set -euo pipefail
+      scope_file="$ARTIFACTS_DIR/implementation-files.txt"
+      head_file="$ARTIFACTS_DIR/implementation-head.txt"
+      if [ ! -s "$scope_file" ] || [ ! -s "$head_file" ]; then
+        echo "BLOCKED: missing implementation scope snapshot"
+        exit 1
+      fi
+      impl_head=$(cat "$head_file")
+      if ! git cat-file -e "$impl_head^{commit}" 2>/dev/null; then
+        echo "BLOCKED: implementation head no longer exists: $impl_head"
+        exit 1
+      fi
+
+      changed="$(mktemp)"
+      violations="$(mktemp)"
+      {
+        git diff --name-only "$impl_head"..HEAD
+        git diff --name-only
+        git diff --cached --name-only
+      } | sort -u > "$changed"
+
+      if [ ! -s "$changed" ]; then
+        echo "validation-scope-gate: no validation file changes"
+        exit 0
+      fi
+
+      comm -23 "$changed" "$scope_file" > "$violations" || true
+      if [ -s "$violations" ]; then
+        echo "BLOCKED: validation changed files outside implementation scope."
+        echo "This usually means a repo-wide formatter/linter rewrite was accepted."
+        echo
+        echo "Out-of-scope validation changes:"
+        cat "$violations"
+        echo
+        echo "Allowed implementation files:"
+        cat "$scope_file"
+        echo
+        echo "Revert the validation-only churn or rerun validation with scoped commands."
+        exit 1
+      fi
+
+      echo "validation-scope-gate: validation changes stayed inside implementation scope"
+    depends_on: [validate]
+    timeout: 30000
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 5: FINALIZE PR
@@ -115,7 +180,7 @@ nodes:
 
   - id: finalize-pr
     command: archon-finalize-pr
-    depends_on: [validate]
+    depends_on: [validation-scope-gate]
     context: fresh
     provider: codex
     model: gpt-5.4-mini
