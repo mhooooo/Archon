@@ -149,8 +149,8 @@ nodes:
     depends_on: [analyze]
     allowed_tools: [Read]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
+    provider: codex
+    model: gpt-5.5
     effort: xhigh
     modelReasoningEffort: xhigh
 
