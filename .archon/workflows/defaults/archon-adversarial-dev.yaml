@@ -309,7 +309,7 @@ nodes:
     depends_on: [adversarial-sprint]
     trigger_rule: all_done
     context: fresh
-    model: haiku
+    model: claude-haiku-4-5-20251001
     prompt: |
       You are a project reporter. Generate a comprehensive summary of the adversarial development run.
 

@@ -285,7 +285,9 @@ nodes:
     command: archon-code-review-agent
     depends_on: [review-routing, sync]
     when: "$review-routing.output.run_code_review == 'true'"
-    effort: max
+    provider: claude
+    model: claude-opus-4-7
+    effort: xhigh
     modelReasoningEffort: xhigh
 
   - id: error-handling

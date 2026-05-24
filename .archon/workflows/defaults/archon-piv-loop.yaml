@@ -174,7 +174,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-plan
-    model: sonnet
+    model: claude-sonnet-4-6
     depends_on: [explore]
     context: fresh
     prompt: |
@@ -540,7 +540,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: code-review
-    model: sonnet
+    model: claude-sonnet-4-6
     depends_on: [implement]
     context: fresh
     prompt: |
@@ -700,7 +700,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: finalize
-    model: sonnet
+    model: claude-sonnet-4-6
     depends_on: [fix-feedback]
     context: fresh
     prompt: |

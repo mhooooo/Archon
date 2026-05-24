@@ -69,7 +69,7 @@ nodes:
 
       Provide reasoning for your classification.
     depends_on: [fetch-issue]
-    model: haiku
+    model: claude-haiku-4-5-20251001
     allowed_tools: []
     output_format:
       type: object
@@ -253,7 +253,7 @@ nodes:
 
       Provide your reasoning for each decision.
     depends_on: [review-scope]
-    model: haiku
+    model: claude-haiku-4-5-20251001
     allowed_tools: []
     context: fresh
     output_format:
