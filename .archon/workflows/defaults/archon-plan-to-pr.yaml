@@ -309,9 +309,9 @@ nodes:
     command: archon-code-review-agent
     depends_on: [visual-audit-scope, sync]
     context: fresh
-    provider: codex
-    model: gpt-5.5
-    effort: max
+    provider: claude
+    model: claude-opus-4-7
+    effort: xhigh
     modelReasoningEffort: xhigh
 
   - id: error-handling
