@@ -244,10 +244,10 @@ nodes:
     command: archon-code-review-agent
     depends_on: [visual-audit-scope, sync]
     context: fresh
-    provider: claude
-    model: claude-opus-4-7
-    effort: xhigh
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: error-handling
     command: archon-error-handling-agent

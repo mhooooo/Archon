@@ -13,8 +13,10 @@ description: |
 nodes:
   - id: scope
     command: archon-pr-review-scope
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: visual-audit-scope
     runtime: bun
@@ -101,48 +103,63 @@ nodes:
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [scope]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [visual-audit-scope, sync]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.4-mini
+    effort: medium
+    modelReasoningEffort: medium
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
-    effort: max
-    modelReasoningEffort: xhigh
+    provider: codex
+    model: gpt-5.5
+    effort: high
+    modelReasoningEffort: high
