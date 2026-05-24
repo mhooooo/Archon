@@ -149,6 +149,10 @@ nodes:
     depends_on: [analyze]
     allowed_tools: [Read]
     context: fresh
+    provider: claude
+    model: claude-opus-4-7
+    effort: xhigh
+    modelReasoningEffort: xhigh
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: EXECUTE

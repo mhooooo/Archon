@@ -25,11 +25,13 @@ nodes:
   - id: create-plan
     command: archon-create-plan
     context: fresh
+    provider: claude
+    model: claude-opus-4-7
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: SETUP
   # ═══════════════════════════════════════════════════════════════════
-    effort: max
+    effort: xhigh
     modelReasoningEffort: xhigh
 
   - id: plan-setup
